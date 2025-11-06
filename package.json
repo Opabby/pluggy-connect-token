@@ -5,6 +5,7 @@
     "@vercel/node": "^1.8.5"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.79.0",
     "pluggy-sdk": "^0.7.0"
   }
 }
