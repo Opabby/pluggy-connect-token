@@ -3,6 +3,15 @@ import { itemsService } from '../../lib/services/items';
 import type { PluggyItemRecord } from '../../lib/types';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    return res.status(200).end(); 
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -16,6 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const savedItem = await itemsService.createItem(itemData);
 
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
     return res.status(201).json(savedItem);
   } catch (error) {
     console.error('Error saving item:', error);
