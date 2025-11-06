@@ -17,6 +17,20 @@ export const accountsService = {
     return data;
   },
 
+  async createMultipleAccounts(accounts: AccountRecord[]): Promise<AccountRecord[]> {
+    const { data, error } = await supabase
+      .from('accounts')
+      .insert(accounts)
+      .select();
+
+    if (error) {
+      console.error('Error creating accounts:', error);
+      throw new Error(`Failed to create accounts: ${error.message}`);
+    }
+
+    return data || [];
+  },
+
   async getAccountsByItemId(itemId: string): Promise<AccountRecord[]> {
     const { data, error } = await supabase
       .from('accounts')
