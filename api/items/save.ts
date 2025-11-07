@@ -87,31 +87,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-      const identityResponse = await pluggyClient.fetchIdentityByItemId(itemData.item_id);
-      console.log('Identity fetched from Pluggy:', identityResponse);
+      const item = await pluggyClient.fetchItem(itemData.item_id);
+      const itemWithIdentity = item as any;
+      console.log('Item fetched from Pluggy:', item);
+      
+      if (itemWithIdentity.identityId) {
+        console.log('Identity ID found:', itemWithIdentity.identityId);
+        const identityResponse = await pluggyClient.fetchIdentity(itemWithIdentity.identityId);
+        console.log('Identity fetched from Pluggy:', identityResponse);
 
-      if (identityResponse) {
-        const identityToSave: IdentityRecord = {
-          item_id: itemData.item_id,
-          identity_id: identityResponse.id,
-          full_name: identityResponse.fullName,
-          company_name: identityResponse.companyName,
-          document: identityResponse.document,
-          document_type: identityResponse.documentType,
-          tax_number: identityResponse.taxNumber,
-          job_title: identityResponse.jobTitle,
-          birth_date: identityResponse.birthDate?.toISOString(),
-          addresses: identityResponse.addresses,
-          phone_numbers: identityResponse.phoneNumbers,
-          emails: identityResponse.emails,
-          relations: identityResponse.relations,
-        };
+        if (identityResponse) {
+          const identityToSave: IdentityRecord = {
+            item_id: itemData.item_id,
+            identity_id: identityResponse.id,
+            full_name: identityResponse.fullName,
+            company_name: identityResponse.companyName,
+            document: identityResponse.document,
+            document_type: identityResponse.documentType,
+            tax_number: identityResponse.taxNumber,
+            job_title: identityResponse.jobTitle,
+            birth_date: identityResponse.birthDate?.toISOString(),
+            addresses: identityResponse.addresses,
+            phone_numbers: identityResponse.phoneNumbers,
+            emails: identityResponse.emails,
+            relations: identityResponse.relations,
+          };
 
-        const savedIdentity = await identityService.createIdentity(identityToSave);
-        console.log('Identity saved to Supabase:', savedIdentity);
-        responseData.identity = savedIdentity;
+          const savedIdentity = await identityService.createIdentity(identityToSave);
+          console.log('Identity saved to Supabase:', savedIdentity);
+          responseData.identity = savedIdentity;
+        }
       } else {
-        console.log('No identity found for this item');
+        console.log('No identity ID available for this item - identity product may not be enabled');
       }
     } catch (identityError) {
       console.error('Error fetching/saving identity:', identityError);
