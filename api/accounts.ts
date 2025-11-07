@@ -16,16 +16,27 @@ export default async function (req: VercelRequest, res: VercelResponse) {
   });
 
   try {
-    const { itemId } = req.query;
+    const { itemId, type } = req.query;
     
     if (!itemId || typeof itemId !== 'string') {
       return res.status(400).json({ error: 'itemId required' });
     }
+
+    if (type && typeof type === 'string' && type !== 'BANK' && type !== 'CREDIT') {
+      return res.status(400).json({ 
+        error: 'Invalid type parameter. Must be either "BANK" or "CREDIT"' 
+      });
+    }
+
+    const accountType = type && typeof type === 'string' ? (type as 'BANK' | 'CREDIT') : undefined;
+    const accountsResponse = await pluggyClient.fetchAccounts(itemId, accountType);
     
-    const accounts = await pluggyClient.fetchAccounts(itemId);
-    return res.json(accounts);
+    return res.json(accountsResponse);
   } catch (error) {
-    console.error('Error fetching accounts:', error);
-    return res.status(500).json({ error: 'Failed to fetch accounts' });
+    console.error('Error fetching accounts from Pluggy:', error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch accounts',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 }

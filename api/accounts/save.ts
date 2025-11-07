@@ -14,6 +14,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'accounts array is required' });
     }
 
+    // Validate that each account has required fields
+    for (const account of accounts) {
+      if (!account.account_id || !account.item_id || !account.name || !account.type) {
+        return res.status(400).json({ 
+          error: 'Each account must have account_id, item_id, name, and type' 
+        });
+      }
+    }
+
     const savedAccounts = await accountsService.createMultipleAccounts(accounts);
 
     return res.status(201).json(savedAccounts);
