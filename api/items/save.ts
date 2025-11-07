@@ -1,7 +1,8 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { itemsService } from '../../lib/services/items';
 import { accountsService } from '../../lib/services/accounts';
-import type { PluggyItemRecord, AccountRecord } from '../../lib/types';
+import { identityService } from '../../lib/services/identity';
+import type { PluggyItemRecord, AccountRecord, IdentityRecord } from '../../lib/types';
 import { PluggyClient } from 'pluggy-sdk';
 
 const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
@@ -26,18 +27,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'item_id is required' });
     }
 
-    // Step 1: Save the item to Supabase
     const savedItem = await itemsService.createItem(itemData);
     console.log('Item saved to Supabase:', savedItem);
 
-    // Step 2: Fetch accounts from Pluggy API
+    const responseData: {
+      item: PluggyItemRecord;
+      accounts?: AccountRecord[];
+      identity?: IdentityRecord;
+      warnings?: string[];
+    } = {
+      item: savedItem,
+      warnings: [],
+    };
+
     if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
-      console.error('Missing Pluggy credentials, skipping account fetch');
+      console.error('Missing Pluggy credentials, skipping data fetch');
+      responseData.warnings?.push('Item saved but accounts/identity not fetched due to missing Pluggy credentials');
       res.setHeader('Access-Control-Allow-Origin', '*');
-      return res.status(201).json({ 
-        item: savedItem,
-        warning: 'Item saved but accounts not fetched due to missing Pluggy credentials'
-      });
+      return res.status(201).json(responseData);
     }
 
     const pluggyClient = new PluggyClient({
@@ -49,7 +56,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const accountsResponse = await pluggyClient.fetchAccounts(itemData.item_id);
       console.log('Accounts fetched from Pluggy:', accountsResponse);
 
-      // Step 3: Transform and save accounts to Supabase
       if (accountsResponse.results && accountsResponse.results.length > 0) {
         const accountsToSave: AccountRecord[] = accountsResponse.results.map((account: any) => ({
           item_id: itemData.item_id,
@@ -70,32 +76,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const savedAccounts = await accountsService.createMultipleAccounts(accountsToSave);
         console.log('Accounts saved to Supabase:', savedAccounts);
-
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        return res.status(201).json({ 
-          item: savedItem,
-          accounts: savedAccounts,
-          message: 'Item and accounts saved successfully'
-        });
+        responseData.accounts = savedAccounts;
       } else {
         console.log('No accounts found for this item');
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        return res.status(201).json({ 
-          item: savedItem,
-          accounts: [],
-          message: 'Item saved but no accounts found'
-        });
+        responseData.accounts = [];
       }
     } catch (accountError) {
       console.error('Error fetching/saving accounts:', accountError);
-      // Still return success for item save, but indicate account fetch/save failed
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      return res.status(201).json({ 
-        item: savedItem,
-        warning: 'Item saved but failed to fetch/save accounts',
-        error: accountError instanceof Error ? accountError.message : 'Unknown error'
-      });
+      responseData.warnings?.push('Failed to fetch/save accounts: ' + (accountError instanceof Error ? accountError.message : 'Unknown error'));
     }
+
+    try {
+      const identityResponse = await pluggyClient.fetchIdentityByItemId(itemData.item_id);
+      console.log('Identity fetched from Pluggy:', identityResponse);
+
+      if (identityResponse) {
+        const identityToSave: IdentityRecord = {
+          item_id: itemData.item_id,
+          identity_id: identityResponse.id,
+          full_name: identityResponse.fullName,
+          company_name: identityResponse.companyName,
+          document: identityResponse.document,
+          document_type: identityResponse.documentType,
+          tax_number: identityResponse.taxNumber,
+          job_title: identityResponse.jobTitle,
+          birth_date: identityResponse.birthDate?.toISOString(),
+          addresses: identityResponse.addresses,
+          phone_numbers: identityResponse.phoneNumbers,
+          emails: identityResponse.emails,
+          relations: identityResponse.relations,
+        };
+
+        const savedIdentity = await identityService.createIdentity(identityToSave);
+        console.log('Identity saved to Supabase:', savedIdentity);
+        responseData.identity = savedIdentity;
+      } else {
+        console.log('No identity found for this item');
+      }
+    } catch (identityError) {
+      console.error('Error fetching/saving identity:', identityError);
+      responseData.warnings?.push('Failed to fetch/save identity: ' + (identityError instanceof Error ? identityError.message : 'Unknown error'));
+    }
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(201).json(responseData);
 
   } catch (error) {
     console.error('Error saving item:', error);
