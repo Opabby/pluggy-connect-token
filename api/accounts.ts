@@ -1,19 +1,16 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { PluggyClient } from 'pluggy-sdk';
+import { getPluggyClient, hasPluggyCredentials } from '../lib/pluggyClient';
 
 const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
 
 export default async function (req: VercelRequest, res: VercelResponse) {
-  if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
+  if (!hasPluggyCredentials()) {
     return res.status(500).json({ 
       error: 'Missing Pluggy credentials in environment variables' 
     });
   }
 
-  const pluggyClient = new PluggyClient({
-    clientId: PLUGGY_CLIENT_ID,
-    clientSecret: PLUGGY_CLIENT_SECRET,
-  });
+  const pluggyClient = getPluggyClient();
 
   try {
     const { itemId, type } = req.query;

@@ -3,7 +3,7 @@ import { itemsService } from '../../lib/services/items';
 import { accountsService } from '../../lib/services/accounts';
 import { identityService } from '../../lib/services/identity';
 import type { PluggyItemRecord, AccountRecord, IdentityRecord } from '../../lib/types';
-import { PluggyClient } from 'pluggy-sdk';
+import { getPluggyClient, hasPluggyCredentials } from '../../lib/pluggyClient';
 import axios from 'axios';
 
 const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
@@ -41,17 +41,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       warnings: [],
     };
 
-    if (!PLUGGY_CLIENT_ID || !PLUGGY_CLIENT_SECRET) {
+    if (!hasPluggyCredentials()) {
       console.error('Missing Pluggy credentials, skipping data fetch');
       responseData.warnings?.push('Item saved but accounts/identity not fetched due to missing Pluggy credentials');
       res.setHeader('Access-Control-Allow-Origin', '*');
       return res.status(201).json(responseData);
     }
 
-    const pluggyClient = new PluggyClient({
-      clientId: PLUGGY_CLIENT_ID,
-      clientSecret: PLUGGY_CLIENT_SECRET,
-    });
+    const pluggyClient = getPluggyClient();
 
     let apiKey: string | null = null;
     try {
