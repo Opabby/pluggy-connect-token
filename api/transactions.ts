@@ -40,7 +40,6 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "accountId is required" });
   }
 
-  // Get transactions from database
   if (fromDb === "true") {
     const parsedLimit =
       limit && typeof limit === "string" ? parseInt(limit) : 100;

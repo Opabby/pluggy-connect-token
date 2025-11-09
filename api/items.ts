@@ -45,7 +45,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 async function handleGet(req: VercelRequest, res: VercelResponse) {
   const { itemId, userId } = req.query;
 
-  // Fetch single item from Pluggy
   if (itemId && typeof itemId === "string") {
     if (!hasPluggyCredentials()) {
       return res.status(500).json({
