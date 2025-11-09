@@ -1,5 +1,4 @@
 export interface PluggyItemRecord {
-  id?: number;
   item_id: string;
   user_id?: string;
   connector_id?: string;
@@ -18,9 +17,8 @@ export interface PluggyItemRecord {
 }
 
 export interface AccountRecord {
-  id?: string;
-  item_id: string;
   account_id: string;
+  item_id: string;
   type: 'BANK' | 'CREDIT' | 'PAYMENT_ACCOUNT';
   subtype?: string;
   number?: string;
@@ -38,9 +36,8 @@ export interface AccountRecord {
 }
 
 export interface CreditCardBillRecord {
-  id?: string;
-  account_id: string;
   bill_id: string;
+  account_id: string;
   due_date: string;
   total_amount: number;
   total_amount_currency_code?: string;
@@ -52,9 +49,8 @@ export interface CreditCardBillRecord {
 }
 
 export interface TransactionRecord {
-  id?: string;
-  account_id: string;
   transaction_id: string;
+  account_id: string;
   date: string;
   description: string;
   description_raw?: string;
@@ -78,9 +74,8 @@ export interface TransactionRecord {
 }
 
 export interface InvestmentRecord {
-  id?: string;
-  item_id: string;
   investment_id: string;
+  item_id: string;
   name: string;
   code?: string;
   isin?: string;
@@ -117,9 +112,8 @@ export interface InvestmentRecord {
 }
 
 export interface InvestmentTransactionRecord {
-  id?: string;
-  investment_id: string;
   transaction_id: string;
+  investment_id: string;
   trade_date: string;
   date: string;
   description?: string;
@@ -135,9 +129,8 @@ export interface InvestmentTransactionRecord {
 }
 
 export interface LoanRecord {
-  id?: string;
-  item_id: string;
   loan_id: string;
+  item_id: string;
   contract_number?: string;
   ipoc_code?: string;
   product_name: string;
@@ -168,9 +161,8 @@ export interface LoanRecord {
 }
 
 export interface IdentityRecord {
-  id?: string;
-  item_id: string;
   identity_id: string;
+  item_id: string;
   full_name?: string;
   company_name?: string;
   document?: string;
