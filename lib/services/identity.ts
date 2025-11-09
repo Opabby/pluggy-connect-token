@@ -69,4 +69,16 @@ export const identityService = {
 
     return data;
   },
+
+  async deleteIdentity(identityId: string): Promise<void> {
+    const { error } = await supabase
+      .from("identities")
+      .delete()
+      .eq("identity_id", identityId);
+
+    if (error) {
+      console.error("Error deleting identity:", error);
+      throw new Error(`Failed to delete identity: ${error.message}`);
+    }
+  },
 };
