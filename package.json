@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.79.0",
+    "axios": "^1.13.2",
     "pluggy-sdk": "^0.7.0"
   }
 }

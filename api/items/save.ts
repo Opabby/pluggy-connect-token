@@ -4,6 +4,7 @@ import { accountsService } from '../../lib/services/accounts';
 import { identityService } from '../../lib/services/identity';
 import type { PluggyItemRecord, AccountRecord, IdentityRecord } from '../../lib/types';
 import { PluggyClient } from 'pluggy-sdk';
+import axios from 'axios';
 
 const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
 
@@ -52,6 +53,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       clientSecret: PLUGGY_CLIENT_SECRET,
     });
 
+    let apiKey: string | null = null;
+    try {
+      const authResponse = await axios.post('https://api.pluggy.ai/auth', {
+        clientId: PLUGGY_CLIENT_ID,
+        clientSecret: PLUGGY_CLIENT_SECRET,
+      });
+      apiKey = authResponse.data.apiKey;
+    } catch (authError) {
+      console.error('Error getting Pluggy API key:', authError);
+      responseData.warnings?.push('Failed to authenticate with Pluggy API');
+    }
+
     try {
       const accountsResponse = await pluggyClient.fetchAccounts(itemData.item_id);
       console.log('Accounts fetched from Pluggy:', accountsResponse);
@@ -86,43 +99,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       responseData.warnings?.push('Failed to fetch/save accounts: ' + (accountError instanceof Error ? accountError.message : 'Unknown error'));
     }
 
-    try {
-      const item = await pluggyClient.fetchItem(itemData.item_id);
-      const itemWithIdentity = item as any;
-      console.log('Item fetched from Pluggy:', item);
-      
-      if (itemWithIdentity.identityId) {
-        console.log('Identity ID found:', itemWithIdentity.identityId);
-        const identityResponse = await pluggyClient.fetchIdentity(itemWithIdentity.identityId);
-        console.log('Identity fetched from Pluggy:', identityResponse);
+    if (apiKey) {
+      try {
+        console.log('Fetching identity for item:', itemData.item_id);
+        const identityResponse = await axios.get('https://api.pluggy.ai/identity', {
+          params: { itemId: itemData.item_id },
+          headers: {
+            'X-API-KEY': apiKey,
+            'Accept': 'application/json',
+          },
+        });
+        
+        console.log('Identity fetched from Pluggy:', identityResponse.data);
 
-        if (identityResponse) {
+        if (identityResponse.data) {
+          const identity = identityResponse.data;
           const identityToSave: IdentityRecord = {
             item_id: itemData.item_id,
-            identity_id: identityResponse.id,
-            full_name: identityResponse.fullName,
-            company_name: identityResponse.companyName,
-            document: identityResponse.document,
-            document_type: identityResponse.documentType,
-            tax_number: identityResponse.taxNumber,
-            job_title: identityResponse.jobTitle,
-            birth_date: identityResponse.birthDate?.toISOString(),
-            addresses: identityResponse.addresses,
-            phone_numbers: identityResponse.phoneNumbers,
-            emails: identityResponse.emails,
-            relations: identityResponse.relations,
+            identity_id: identity.id,
+            full_name: identity.fullName,
+            company_name: identity.companyName,
+            document: identity.document,
+            document_type: identity.documentType,
+            tax_number: identity.taxNumber,
+            job_title: identity.jobTitle,
+            birth_date: identity.birthDate ? new Date(identity.birthDate).toISOString() : undefined,
+            addresses: identity.addresses,
+            phone_numbers: identity.phoneNumbers,
+            emails: identity.emails,
+            relations: identity.relations,
           };
 
           const savedIdentity = await identityService.createIdentity(identityToSave);
           console.log('Identity saved to Supabase:', savedIdentity);
           responseData.identity = savedIdentity;
         }
-      } else {
-        console.log('No identity ID available for this item - identity product may not be enabled');
+      } catch (identityError: any) {
+        if (identityError.response?.status === 404) {
+          console.log('No identity available for this item (404)');
+        } else {
+          console.error('Error fetching/saving identity:', identityError);
+          responseData.warnings?.push('Failed to fetch/save identity: ' + (identityError.response?.data?.message || identityError.message || 'Unknown error'));
+        }
       }
-    } catch (identityError) {
-      console.error('Error fetching/saving identity:', identityError);
-      responseData.warnings?.push('Failed to fetch/save identity: ' + (identityError instanceof Error ? identityError.message : 'Unknown error'));
     }
 
     res.setHeader('Access-Control-Allow-Origin', '*');
