@@ -306,6 +306,7 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
 
   const warnings: string[] = [];
 
+  // Attempt to delete from Pluggy (non-blocking)
   if (hasPluggyCredentials()) {
     try {
       const pluggyClient = getPluggyClient();
@@ -317,60 +318,35 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
 
       if (error.response?.status === 404) {
         warnings.push(
-          "Item not found in Pluggy (already deleted or never existed), proceeding with database cleanup"
+          "Item not found in Pluggy (already deleted or never existed)"
         );
       } else {
         warnings.push(
           `Failed to delete from Pluggy: ${
             error.message || "Unknown error"
-          }, but proceeding with database cleanup`
+          }`
         );
       }
-
-      try {
-        const identity = await identityService.getIdentityByItemId(itemId);
-        if (identity) {
-          await identityService.deleteIdentity(identity.identity_id);
-          console.log(`Identity deleted for item ${itemId}`);
-        }
-      } catch (identityError) {
-        console.error("Error deleting identity:", identityError);
-        warnings.push("Failed to delete identity from database");
-      }
-
-      try {
-        const accounts = await accountsService.getAccountsByItemId(itemId);
-        if (accounts && accounts.length > 0) {
-          for (const account of accounts) {
-            await accountsService.deleteAccount(account.account_id);
-          }
-          console.log(
-            `${accounts.length} account(s) deleted for item ${itemId}`
-          );
-        }
-      } catch (accountsError) {
-        console.error("Error deleting accounts:", accountsError);
-        warnings.push("Failed to delete accounts from database");
-      }
-
-      try {
-        await itemsService.deleteItem(itemId);
-        console.log(`Item ${itemId} deleted from database`);
-      } catch (itemError) {
-        console.error("Error deleting item from database:", itemError);
-        return res.status(500).json({
-          error: "Failed to delete item from database",
-          details:
-            itemError instanceof Error ? itemError.message : "Unknown error",
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: "Item and related data deleted successfully",
-        itemId,
-        warnings: warnings.length > 0 ? warnings : undefined,
-      });
     }
   }
+
+  // Delete item from database (CASCADE DELETE will handle related records)
+  try {
+    await itemsService.deleteItem(itemId);
+    console.log(`Item ${itemId} deleted from database (cascade delete handled related records)`);
+  } catch (itemError) {
+    console.error("Error deleting item from database:", itemError);
+    return res.status(500).json({
+      error: "Failed to delete item from database",
+      details:
+        itemError instanceof Error ? itemError.message : "Unknown error",
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    message: "Item and related data deleted successfully",
+    itemId,
+    warnings: warnings.length > 0 ? warnings : undefined,
+  });
 }
