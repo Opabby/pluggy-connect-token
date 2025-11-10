@@ -11,6 +11,7 @@ import type {
   IdentityRecord,
   TransactionRecord,
   InvestmentRecord,
+  InvestmentTransactionRecord,
 } from "../lib/types";
 import axios from "axios";
 
@@ -358,6 +359,99 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           await investmentsService.createMultipleInvestments(investmentsToSave);
         console.log("Investments saved to Supabase:", savedInvestments);
         responseData.investments = savedInvestments;
+
+        // Fetch and save investment transactions for each investment
+        if (savedInvestments && savedInvestments.length > 0) {
+          const allInvestmentTransactions: InvestmentTransactionRecord[] = [];
+
+          for (const investment of savedInvestments) {
+            try {
+              console.log(
+                `Fetching transactions for investment: ${investment.investment_id}`
+              );
+              const transactionsResponse = await axios.get(
+                `https://api.pluggy.ai/investments/${investment.investment_id}/transactions`,
+                {
+                  params: { pageSize: 500, page: 1 },
+                  headers: {
+                    "X-API-KEY": apiKey,
+                    Accept: "application/json",
+                  },
+                }
+              );
+
+              if (
+                transactionsResponse.data?.results &&
+                transactionsResponse.data.results.length > 0
+              ) {
+                const transactionsToSave: InvestmentTransactionRecord[] =
+                  transactionsResponse.data.results.map((transaction: any) => ({
+                    transaction_id: transaction.id,
+                    investment_id: investment.investment_id,
+                    trade_date: transaction.tradeDate,
+                    date: transaction.date,
+                    description: transaction.description,
+                    quantity: transaction.quantity,
+                    value: transaction.value,
+                    amount: transaction.amount,
+                    net_amount: transaction.netAmount,
+                    type: transaction.type as
+                      | "BUY"
+                      | "SELL"
+                      | "DIVIDEND"
+                      | "SPLIT"
+                      | "BONUS",
+                    brokerage_number: transaction.brokerageNumber,
+                    expenses: transaction.expenses,
+                  }));
+
+                allInvestmentTransactions.push(...transactionsToSave);
+                console.log(
+                  `Found ${transactionsToSave.length} transactions for investment ${investment.investment_id}`
+                );
+              } else {
+                console.log(
+                  `No transactions found for investment ${investment.investment_id}`
+                );
+              }
+            } catch (transactionError) {
+              console.error(
+                `Error fetching transactions for investment ${investment.investment_id}:`,
+                transactionError
+              );
+              responseData.warnings?.push(
+                `Failed to fetch transactions for investment ${investment.investment_id}: ${
+                  transactionError instanceof Error
+                    ? transactionError.message
+                    : "Unknown error"
+                }`
+              );
+            }
+          }
+
+          // Save all investment transactions in batch
+          if (allInvestmentTransactions.length > 0) {
+            try {
+              const savedInvestmentTransactions =
+                await investmentsService.createMultipleInvestmentTransactions(
+                  allInvestmentTransactions
+                );
+              console.log(
+                `Saved ${savedInvestmentTransactions.length} investment transactions to Supabase`
+              );
+            } catch (saveError) {
+              console.error(
+                "Error saving investment transactions to Supabase:",
+                saveError
+              );
+              responseData.warnings?.push(
+                `Failed to save investment transactions: ${
+                  saveError instanceof Error ? saveError.message : "Unknown error"
+                }`
+              );
+            }
+          }
+        }
       } else {
         console.log("No investments found for this item");
         responseData.investments = [];
