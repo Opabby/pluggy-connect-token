@@ -75,13 +75,19 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-//   const transactionsResponse = await pluggyClient.fetchTransactions(
-//     accountId,
-//     from as string | undefined,
-//     to as string | undefined
-//   );
+  try {
+    const transactionsResponse = await pluggyClient.fetchTransactions(
+      accountId
+    );
 
-//   return res.json(transactionsResponse);
+    return res.json(transactionsResponse);
+  } catch (error) {
+    console.error("Error fetching transactions from Pluggy:", error);
+    return res.status(500).json({
+      error: "Failed to fetch transactions from Pluggy",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
@@ -104,9 +110,8 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  const savedTransactions = await transactionsService.createMultipleTransactions(
-    transactions
-  );
+  const savedTransactions =
+    await transactionsService.createMultipleTransactions(transactions);
 
   return res.status(201).json(savedTransactions);
 }
