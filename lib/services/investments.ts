@@ -54,6 +54,22 @@ export const investmentsService = {
     return data || [];
   },
 
+  async createMultipleInvestments(
+    investments: InvestmentRecord[]
+  ): Promise<InvestmentRecord[]> {
+    const { data, error } = await supabase
+      .from("investments")
+      .insert(investments)
+      .select();
+
+    if (error) {
+      console.error("Error creating investments:", error);
+      throw new Error(`Failed to create investments: ${error.message}`);
+    }
+
+    return data || [];
+  },
+
   async updateInvestment(
     investmentId: string,
     updateData: Partial<InvestmentRecord>

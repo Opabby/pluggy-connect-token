@@ -3,12 +3,14 @@ import { itemsService } from "../lib/services/items";
 import { accountsService } from "../lib/services/accounts";
 import { identityService } from "../lib/services/identity";
 import { transactionsService } from "../lib/services/transactions";
+import { investmentsService } from "../lib/services/investments";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type {
   PluggyItemRecord,
   AccountRecord,
   IdentityRecord,
   TransactionRecord,
+  InvestmentRecord,
 } from "../lib/types";
 import axios from "axios";
 
@@ -79,6 +81,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     item: PluggyItemRecord;
     accounts?: AccountRecord[];
     identity?: IdentityRecord;
+    investments?: InvestmentRecord[];
     warnings?: string[];
   } = {
     item: savedItem,
@@ -88,7 +91,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, skipping data fetch");
     responseData.warnings?.push(
-      "Item saved but accounts/identity not fetched due to missing Pluggy credentials"
+      "Item saved but accounts/identity/investments not fetched due to missing Pluggy credentials"
     );
     return res.status(201).json(responseData);
   }
@@ -290,6 +293,97 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       } else {
         console.error("Error fetching/saving identity:", identityError);
         responseData.warnings?.push("Failed to fetch/save identity");
+      }
+    }
+  }
+
+  if (apiKey) {
+    try {
+      console.log("Fetching investments for item:", itemData.item_id);
+      const investmentsResponse = await axios.get(
+        "https://api.pluggy.ai/investments",
+        {
+          params: { itemId: itemData.item_id },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        }
+      );
+
+      console.log("Investments fetched from Pluggy:", investmentsResponse.data);
+
+      if (
+        investmentsResponse.data?.results &&
+        investmentsResponse.data.results.length > 0
+      ) {
+        const investmentsToSave: InvestmentRecord[] =
+          investmentsResponse.data.results.map((investment: any) => ({
+            item_id: itemData.item_id,
+            investment_id: investment.id,
+            name: investment.name,
+            code: investment.code,
+            isin: investment.isin,
+            number: investment.number,
+            owner: investment.owner,
+            currency_code: investment.currencyCode,
+            type: investment.type,
+            subtype: investment.subtype,
+            last_month_rate: investment.lastMonthRate,
+            last_twelve_months_rate: investment.lastTwelveMonthsRate,
+            annual_rate: investment.annualRate,
+            date: investment.date,
+            value: investment.value,
+            quantity: investment.quantity,
+            amount: investment.amount,
+            balance: investment.balance,
+            taxes: investment.taxes,
+            taxes2: investment.taxes2,
+            due_date: investment.dueDate,
+            rate: investment.rate,
+            rate_type: investment.rateType,
+            fixed_annual_rate: investment.fixedAnnualRate,
+            issuer: investment.issuer,
+            issue_date: investment.issueDate,
+            amount_profit: investment.amountProfit,
+            amount_withdrawal: investment.amountWithdrawal,
+            amount_original: investment.amountOriginal,
+            status: investment.status,
+            institution: investment.institution,
+            metadata: investment.metadata,
+            provider_id: investment.providerId,
+          }));
+
+        const savedInvestments =
+          await investmentsService.createMultipleInvestments(investmentsToSave);
+        console.log("Investments saved to Supabase:", savedInvestments);
+        responseData.investments = savedInvestments;
+      } else {
+        console.log("No investments found for this item");
+        responseData.investments = [];
+      }
+    } catch (investmentError) {
+      if (
+        investmentError &&
+        typeof investmentError === "object" &&
+        "response" in investmentError
+      ) {
+        const axiosError = investmentError as any;
+        if (axiosError.response?.status === 404) {
+          console.log("No investments available for this item (404)");
+          responseData.investments = [];
+        } else {
+          console.error("Error fetching/saving investments:", investmentError);
+          responseData.warnings?.push(
+            "Failed to fetch/save investments: " +
+              (axiosError.response?.data?.message ||
+                axiosError.message ||
+                "Unknown error")
+          );
+        }
+      } else {
+        console.error("Error fetching/saving investments:", investmentError);
+        responseData.warnings?.push("Failed to fetch/save investments");
       }
     }
   }
