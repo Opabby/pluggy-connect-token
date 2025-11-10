@@ -4,6 +4,7 @@ import { accountsService } from "../lib/services/accounts";
 import { identityService } from "../lib/services/identity";
 import { transactionsService } from "../lib/services/transactions";
 import { investmentsService } from "../lib/services/investments";
+import { loansService } from "../lib/services/loans";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type {
   PluggyItemRecord,
@@ -12,6 +13,7 @@ import type {
   TransactionRecord,
   InvestmentRecord,
   InvestmentTransactionRecord,
+  LoanRecord,
 } from "../lib/types";
 import axios from "axios";
 
@@ -83,6 +85,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     accounts?: AccountRecord[];
     identity?: IdentityRecord;
     investments?: InvestmentRecord[];
+    loans?: LoanRecord[];
     warnings?: string[];
   } = {
     item: savedItem,
@@ -92,7 +95,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, skipping data fetch");
     responseData.warnings?.push(
-      "Item saved but accounts/identity/investments not fetched due to missing Pluggy credentials"
+      "Item saved but accounts/identity/investments/loans not fetched due to missing Pluggy credentials"
     );
     return res.status(201).json(responseData);
   }
@@ -478,6 +481,92 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       } else {
         console.error("Error fetching/saving investments:", investmentError);
         responseData.warnings?.push("Failed to fetch/save investments");
+      }
+    }
+  }
+
+  // Fetch and save loans
+  if (apiKey) {
+    try {
+      console.log("Fetching loans for item:", itemData.item_id);
+      const loansResponse = await axios.get("https://api.pluggy.ai/loans", {
+        params: { itemId: itemData.item_id },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+
+      console.log("Loans fetched from Pluggy:", loansResponse.data);
+
+      // Handle both response formats: { results: [...] } or direct array
+      const loansData = loansResponse.data?.results || loansResponse.data;
+      const loansArray = Array.isArray(loansData) ? loansData : [];
+
+      if (loansArray.length > 0) {
+        const loansToSave: LoanRecord[] = loansArray.map(
+          (loan: any) => ({
+            item_id: itemData.item_id,
+            loan_id: loan.id,
+            contract_number: loan.contractNumber,
+            ipoc_code: loan.ipocCode,
+            product_name: loan.productName,
+            provider_id: loan.providerId,
+            type: loan.type,
+            date: loan.date,
+            contract_date: loan.contractDate,
+            disbursement_dates: loan.disbursementDates,
+            settlement_date: loan.settlementDate,
+            due_date: loan.dueDate,
+            first_installment_due_date: loan.firstInstallmentDueDate,
+            contract_amount: loan.contractAmount,
+            currency_code: loan.currencyCode,
+            cet: loan.cet,
+            installment_periodicity: loan.installmentPeriodicity,
+            installment_periodicity_additional_info:
+              loan.installmentPeriodicityAdditionalInfo,
+            amortization_scheduled: loan.amortizationScheduled,
+            amortization_scheduled_additional_info:
+              loan.amortizationScheduledAdditionalInfo,
+            cnpj_consignee: loan.cnpjConsignee,
+            interest_rates: loan.interestRates,
+            contracted_fees: loan.contractedFees,
+            contracted_finance_charges: loan.contractedFinanceCharges,
+            warranties: loan.warranties,
+            installments: loan.installments,
+            payments: loan.payments,
+          })
+        );
+
+        const savedLoans = await loansService.createMultipleLoans(loansToSave);
+        console.log("Loans saved to Supabase:", savedLoans);
+        responseData.loans = savedLoans;
+      } else {
+        console.log("No loans found for this item");
+        responseData.loans = [];
+      }
+    } catch (loanError) {
+      if (
+        loanError &&
+        typeof loanError === "object" &&
+        "response" in loanError
+      ) {
+        const axiosError = loanError as any;
+        if (axiosError.response?.status === 404) {
+          console.log("No loans available for this item (404)");
+          responseData.loans = [];
+        } else {
+          console.error("Error fetching/saving loans:", loanError);
+          responseData.warnings?.push(
+            "Failed to fetch/save loans: " +
+              (axiosError.response?.data?.message ||
+                axiosError.message ||
+                "Unknown error")
+          );
+        }
+      } else {
+        console.error("Error fetching/saving loans:", loanError);
+        responseData.warnings?.push("Failed to fetch/save loans");
       }
     }
   }

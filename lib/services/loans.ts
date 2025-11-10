@@ -35,6 +35,20 @@ export const loansService = {
     return data;
   },
 
+  async createMultipleLoans(loans: LoanRecord[]): Promise<LoanRecord[]> {
+    const { data, error } = await supabase
+      .from("loans")
+      .insert(loans)
+      .select();
+
+    if (error) {
+      console.error("Error creating loans:", error);
+      throw new Error(`Failed to create loans: ${error.message}`);
+    }
+
+    return data || [];
+  },
+
   async getLoansByItemId(itemId: string): Promise<LoanRecord[]> {
     const { data, error } = await supabase
       .from("loans")
