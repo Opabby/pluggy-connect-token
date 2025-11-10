@@ -2,11 +2,13 @@ import { VercelRequest, VercelResponse } from "@vercel/node";
 import { itemsService } from "../lib/services/items";
 import { accountsService } from "../lib/services/accounts";
 import { identityService } from "../lib/services/identity";
+import { transactionsService } from "../lib/services/transactions";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type {
   PluggyItemRecord,
   AccountRecord,
   IdentityRecord,
+  TransactionRecord,
 } from "../lib/types";
 import axios from "axios";
 
@@ -134,6 +136,84 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       );
       console.log("Accounts saved to Supabase:", savedAccounts);
       responseData.accounts = savedAccounts;
+
+      // Fetch and save transactions for each account
+      if (savedAccounts && savedAccounts.length > 0) {
+        const allTransactions: TransactionRecord[] = [];
+        
+        for (const account of savedAccounts) {
+          try {
+            console.log(`Fetching transactions for account: ${account.account_id}`);
+            const transactionsResponse = await pluggyClient.fetchTransactions(
+              account.account_id
+            );
+
+            if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+              const transactionsToSave: TransactionRecord[] = transactionsResponse.results.map(
+                (transaction: any) => ({
+                  transaction_id: transaction.id,
+                  account_id: account.account_id,
+                  date: transaction.date,
+                  description: transaction.description || "",
+                  description_raw: transaction.descriptionRaw,
+                  amount: transaction.amount,
+                  amount_in_account_currency: transaction.amountInAccountCurrency,
+                  balance: transaction.balance,
+                  currency_code: transaction.currencyCode,
+                  category: transaction.category,
+                  category_id: transaction.categoryId,
+                  provider_code: transaction.providerCode,
+                  provider_id: transaction.providerId,
+                  status: transaction.status,
+                  type: transaction.type,
+                  operation_type: transaction.operationType,
+                  operation_category: transaction.operationCategory,
+                  payment_data: transaction.paymentData,
+                  credit_card_metadata: transaction.creditCardMetadata,
+                  merchant: transaction.merchant,
+                })
+              );
+
+              allTransactions.push(...transactionsToSave);
+              console.log(
+                `Found ${transactionsToSave.length} transactions for account ${account.account_id}`
+              );
+            } else {
+              console.log(`No transactions found for account ${account.account_id}`);
+            }
+          } catch (transactionError) {
+            console.error(
+              `Error fetching transactions for account ${account.account_id}:`,
+              transactionError
+            );
+            responseData.warnings?.push(
+              `Failed to fetch transactions for account ${account.account_id}: ${
+                transactionError instanceof Error
+                  ? transactionError.message
+                  : "Unknown error"
+              }`
+            );
+          }
+        }
+
+        // Save all transactions in batch
+        if (allTransactions.length > 0) {
+          try {
+            const savedTransactions =
+              await transactionsService.createMultipleTransactions(allTransactions);
+            console.log(
+              `Saved ${savedTransactions.length} transactions to Supabase`
+            );
+          } catch (saveError) {
+            console.error("Error saving transactions to Supabase:", saveError);
+            responseData.warnings?.push(
+              `Failed to save transactions: ${
+                saveError instanceof Error ? saveError.message : "Unknown error"
+              }`
+            );
+          }
+        }
+      }
     } else {
       console.log("No accounts found for this item");
       responseData.accounts = [];
