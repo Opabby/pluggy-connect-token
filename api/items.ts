@@ -5,6 +5,7 @@ import { identityService } from "../lib/services/identity";
 import { transactionsService } from "../lib/services/transactions";
 import { investmentsService } from "../lib/services/investments";
 import { loansService } from "../lib/services/loans";
+import { creditCardBillsService } from "../lib/services/credit-card-bills";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type {
   PluggyItemRecord,
@@ -14,6 +15,7 @@ import type {
   InvestmentRecord,
   InvestmentTransactionRecord,
   LoanRecord,
+  CreditCardBillRecord,
 } from "../lib/types";
 import axios from "axios";
 
@@ -215,6 +217,76 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
             console.error("Error saving transactions to Supabase:", saveError);
             responseData.warnings?.push(
               `Failed to save transactions: ${
+                saveError instanceof Error ? saveError.message : "Unknown error"
+              }`
+            );
+          }
+        }
+
+        // Fetch and save credit card bills for each account
+        const allBills: CreditCardBillRecord[] = [];
+
+        for (const account of savedAccounts) {
+          try {
+            console.log(`Fetching bills for account: ${account.account_id}`);
+            const billsResponse = await axios.get("https://api.pluggy.ai/bills", {
+              params: { accountId: account.account_id },
+              headers: {
+                "X-API-KEY": apiKey,
+                Accept: "application/json",
+              },
+            });
+
+            // Handle both response formats: { results: [...] } or direct array
+            const billsData = billsResponse.data?.results || billsResponse.data;
+            const billsArray = Array.isArray(billsData) ? billsData : [];
+
+            if (billsArray.length > 0) {
+              const billsToSave: CreditCardBillRecord[] = billsArray.map(
+                (bill: any) => ({
+                  bill_id: bill.id,
+                  account_id: account.account_id,
+                  due_date: bill.dueDate,
+                  total_amount: bill.totalAmount,
+                  total_amount_currency_code: bill.totalAmountCurrencyCode,
+                  minimum_payment_amount: bill.minimumPaymentAmount,
+                  allows_installments: bill.allowsInstallments,
+                  finance_charges: bill.financeCharges,
+                })
+              );
+
+              allBills.push(...billsToSave);
+              console.log(
+                `Found ${billsToSave.length} bills for account ${account.account_id}`
+              );
+            } else {
+              console.log(`No bills found for account ${account.account_id}`);
+            }
+          } catch (billError) {
+            console.error(
+              `Error fetching bills for account ${account.account_id}:`,
+              billError
+            );
+            responseData.warnings?.push(
+              `Failed to fetch bills for account ${account.account_id}: ${
+                billError instanceof Error
+                  ? billError.message
+                  : "Unknown error"
+              }`
+            );
+          }
+        }
+
+        // Save all bills in batch
+        if (allBills.length > 0) {
+          try {
+            const savedBills =
+              await creditCardBillsService.createMultipleBills(allBills);
+            console.log(`Saved ${savedBills.length} bills to Supabase`);
+          } catch (saveError) {
+            console.error("Error saving bills to Supabase:", saveError);
+            responseData.warnings?.push(
+              `Failed to save bills: ${
                 saveError instanceof Error ? saveError.message : "Unknown error"
               }`
             );

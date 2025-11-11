@@ -39,6 +39,22 @@ export const creditCardBillsService = {
     return data;
   },
 
+  async createMultipleBills(
+    bills: CreditCardBillRecord[]
+  ): Promise<CreditCardBillRecord[]> {
+    const { data, error } = await supabase
+      .from("credit_card_bills")
+      .insert(bills)
+      .select();
+
+    if (error) {
+      console.error("Error creating credit card bills:", error);
+      throw new Error(`Failed to create credit card bills: ${error.message}`);
+    }
+
+    return data || [];
+  },
+
   async getBillsByAccountId(
     accountId: string
   ): Promise<CreditCardBillRecord[]> {
