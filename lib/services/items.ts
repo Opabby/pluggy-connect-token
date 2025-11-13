@@ -4,7 +4,7 @@ import { supabase } from "../supabase";
 export const itemsService = {
   async upsertItem(itemData: PluggyItemRecord): Promise<PluggyItemRecord> {
     const { data, error } = await supabase
-      .from("items")
+      .from("pluggy_items")
       .upsert(itemData, {
         onConflict: "item_id",
         ignoreDuplicates: false,

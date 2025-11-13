@@ -51,6 +51,25 @@ export const accountsService = {
     return data || [];
   },
 
+  async upsertMultipleAccounts(
+    accounts: AccountRecord[]
+  ): Promise<AccountRecord[]> {
+    const { data, error } = await supabase
+      .from("accounts")
+      .upsert(accounts, {
+        onConflict: "account_id",
+        ignoreDuplicates: false,
+      })
+      .select();
+
+    if (error) {
+      console.error("Error upserting accounts:", error);
+      throw new Error(`Failed to upsert accounts: ${error.message}`);
+    }
+
+    return data || [];
+  },
+
   async getAccountsByItemId(itemId: string): Promise<AccountRecord[]> {
     const { data, error } = await supabase
       .from("accounts")

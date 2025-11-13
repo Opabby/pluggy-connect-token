@@ -6,7 +6,7 @@ export const creditCardBillsService = {
     billData: CreditCardBillRecord
   ): Promise<CreditCardBillRecord> {
     const { data, error } = await supabase
-      .from("bills")
+      .from("credit_card_bills")
       .upsert(billData, {
         onConflict: "bill_id",
         ignoreDuplicates: false,

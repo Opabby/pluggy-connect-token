@@ -4,7 +4,7 @@ import { supabase } from "../supabase";
 export const identityService = {
   async upsertIdentity(identityData: IdentityRecord): Promise<IdentityRecord> {
     const { data, error } = await supabase
-      .from("identitiess")
+      .from("identities")
       .upsert(identityData, {
         onConflict: "identity_id",
         ignoreDuplicates: false,

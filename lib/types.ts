@@ -180,3 +180,118 @@ export interface IdentityRecord {
   created_at?: string;
   updated_at?: string;
 }
+
+// Webhook Event Types
+export type WebhookEventType =
+  // Data Events
+  | 'item/created'
+  | 'item/updated'
+  | 'item/deleted'
+  | 'item/error'
+  | 'item/waiting_user_input'
+  | 'item/login_succeeded'
+  | 'connector/status_updated'
+  | 'transactions/deleted'
+  | 'transactions/created'
+  | 'transactions/updated'
+  // Payment Events
+  | 'payment_intent/created'
+  | 'payment_intent/completed'
+  | 'payment_intent/waiting_payer_authorization'
+  | 'payment_intent/error'
+  | 'scheduled_payment/created'
+  | 'scheduled_payment/completed'
+  | 'scheduled_payment/error'
+  | 'scheduled_payment/canceled'
+  | 'payment_refund/completed'
+  | 'payment_refund/error'
+  | 'payment_request/updated'
+  | 'automatic_pix_payment/created'
+  | 'automatic_pix_payment/completed'
+  | 'automatic_pix_payment/error'
+  | 'automatic_pix_payment/canceled';
+
+export type TriggeredBy = 'USER' | 'CLIENT' | 'SYNC' | 'INTERNAL';
+export type ConnectorStatus = 'ONLINE' | 'UNSTABLE' | 'OFFLINE';
+export type PaymentRequestStatus = 'CANCELED' | 'PENDING' | 'COMPLETED' | 'ERROR';
+
+// Base Webhook Payload (matches actual payload structure from RequestCatcher)
+export interface BaseWebhookPayload {
+  event: WebhookEventType;
+  eventId: string;
+  id?: string; // Present in some payloads (same as itemId)
+  clientId?: string;
+  clientUserId?: string;
+  triggeredBy?: TriggeredBy;
+}
+
+// Item Webhook Payloads (based on actual payload structure)
+export interface ItemWebhookPayload extends BaseWebhookPayload {
+  itemId: string;
+  id?: string; // Sometimes present (same as itemId)
+  triggeredBy: TriggeredBy;
+  clientUserId?: string;
+  clientId?: string;
+}
+
+// Connector Webhook Payload
+export interface ConnectorStatusWebhookPayload extends BaseWebhookPayload {
+  event: 'connector/status_updated';
+  connectorId: string;
+  id?: string;
+  data: {
+    status: ConnectorStatus;
+  };
+}
+
+// Transaction Webhook Payloads
+export interface TransactionsWebhookPayload extends BaseWebhookPayload {
+  itemId: string;
+  accountId?: string;
+  transactionIds: string[];
+}
+
+// Payment Intent Webhook Payloads
+export interface PaymentIntentWebhookPayload extends BaseWebhookPayload {
+  paymentIntentId: string;
+  paymentRequestId?: string;
+  bulkPaymentId?: string;
+}
+
+// Payment Request Webhook Payload
+export interface PaymentRequestWebhookPayload extends BaseWebhookPayload {
+  event: 'payment_request/updated';
+  paymentRequestId: string;
+  clientId: string;
+  status: PaymentRequestStatus;
+}
+
+// Scheduled Payment Webhook Payloads
+export interface ScheduledPaymentWebhookPayload extends BaseWebhookPayload {
+  paymentRequestId: string;
+  scheduledPaymentId: string;
+}
+
+// Automatic PIX Payment Webhook Payloads
+export interface AutomaticPixPaymentWebhookPayload extends BaseWebhookPayload {
+  paymentRequestId: string;
+  automaticPixPaymentId: string;
+  endToEndId?: string;
+}
+
+// Payment Refund Webhook Payloads
+export interface PaymentRefundWebhookPayload extends BaseWebhookPayload {
+  refundId: string;
+  paymentRequestId?: string;
+}
+
+// Union type for all webhook payloads
+export type WebhookPayload =
+  | ItemWebhookPayload
+  | ConnectorStatusWebhookPayload
+  | TransactionsWebhookPayload
+  | PaymentIntentWebhookPayload
+  | PaymentRequestWebhookPayload
+  | ScheduledPaymentWebhookPayload
+  | AutomaticPixPaymentWebhookPayload
+  | PaymentRefundWebhookPayload;
