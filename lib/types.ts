@@ -248,7 +248,7 @@ export interface ConnectorStatusWebhookPayload extends BaseWebhookPayload {
 export interface TransactionsWebhookPayload extends BaseWebhookPayload {
   itemId: string;
   accountId?: string;
-  transactionIds: string[];
+  transactionIds?: string[]; // Optional - may not be present in all webhook payloads
 }
 
 // Payment Intent Webhook Payloads

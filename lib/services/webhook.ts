@@ -588,15 +588,122 @@ async function handleConnectorStatusUpdate(payload: ConnectorStatusWebhookPayloa
  */
 async function handleTransactionsCreated(payload: TransactionsWebhookPayload): Promise<void> {
   const { itemId, accountId, transactionIds } = payload;
+  
+  // Handle case where transactionIds is missing or empty
+  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+    console.log(`Transactions created event for item ${itemId}, account ${accountId || "unknown"}: No transaction IDs provided, fetching all transactions for account`);
+    
+    // If no transactionIds provided, fetch all transactions for the account/item
+    // This handles cases where the webhook doesn't include specific transaction IDs
+    if (!hasPluggyCredentials()) {
+      console.error("Missing Pluggy credentials, cannot fetch transactions");
+      return;
+    }
+
+    try {
+      const pluggyClient = getPluggyClient();
+      
+      // If accountId is provided, fetch all transactions for that account
+      if (accountId) {
+        const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
+        if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+          // Upsert all transactions (new ones will be created, existing ones updated)
+          for (const transaction of transactionsResponse.results) {
+            const transactionData = transaction as any;
+            const transactionDate = transactionData.date 
+              ? (typeof transactionData.date === 'string' 
+                  ? transactionData.date 
+                  : new Date(transactionData.date).toISOString().split('T')[0])
+              : new Date().toISOString().split('T')[0];
+            
+            const transactionRecord: TransactionRecord = {
+              transaction_id: transactionData.id,
+              account_id: accountId,
+              date: transactionDate,
+              description: transactionData.description || "",
+              description_raw: transactionData.descriptionRaw,
+              amount: transactionData.amount,
+              amount_in_account_currency: transactionData.amountInAccountCurrency,
+              balance: transactionData.balance,
+              currency_code: transactionData.currencyCode,
+              category: transactionData.category,
+              category_id: transactionData.categoryId,
+              provider_code: transactionData.providerCode,
+              provider_id: transactionData.providerId,
+              status: transactionData.status,
+              type: transactionData.type,
+              operation_type: transactionData.operationType,
+              operation_category: transactionData.operationCategory,
+              payment_data: transactionData.paymentData,
+              credit_card_metadata: transactionData.creditCardMetadata,
+              merchant: transactionData.merchant,
+            };
+
+            await transactionsService.upsertTransaction(transactionRecord);
+          }
+          console.log(`Upserted ${transactionsResponse.results.length} transactions for account ${accountId}`);
+        }
+      } else {
+        // If no accountId, fetch all accounts for the item and sync all transactions
+        console.log("No accountId provided, fetching all accounts for item");
+        const accountsResponse = await pluggyClient.fetchAccounts(itemId);
+        if (accountsResponse.results && accountsResponse.results.length > 0) {
+          for (const account of accountsResponse.results) {
+            const accountData = account as any;
+            try {
+              const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
+              if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+                for (const transaction of transactionsResponse.results) {
+                  const transactionData = transaction as any;
+                  const transactionDate = transactionData.date 
+                    ? (typeof transactionData.date === 'string' 
+                        ? transactionData.date 
+                        : new Date(transactionData.date).toISOString().split('T')[0])
+                    : new Date().toISOString().split('T')[0];
+                  
+                  const transactionRecord: TransactionRecord = {
+                    transaction_id: transactionData.id,
+                    account_id: accountData.id,
+                    date: transactionDate,
+                    description: transactionData.description || "",
+                    description_raw: transactionData.descriptionRaw,
+                    amount: transactionData.amount,
+                    amount_in_account_currency: transactionData.amountInAccountCurrency,
+                    balance: transactionData.balance,
+                    currency_code: transactionData.currencyCode,
+                    category: transactionData.category,
+                    category_id: transactionData.categoryId,
+                    provider_code: transactionData.providerCode,
+                    provider_id: transactionData.providerId,
+                    status: transactionData.status,
+                    type: transactionData.type,
+                    operation_type: transactionData.operationType,
+                    operation_category: transactionData.operationCategory,
+                    payment_data: transactionData.paymentData,
+                    credit_card_metadata: transactionData.creditCardMetadata,
+                    merchant: transactionData.merchant,
+                  };
+
+                  await transactionsService.upsertTransaction(transactionRecord);
+                }
+              }
+            } catch (error) {
+              console.error(`Error fetching transactions for account ${accountData.id}:`, error);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error handling transactions created event (no IDs):`, error);
+      throw error;
+    }
+    return;
+  }
+
   console.log(`Transactions created for item ${itemId}, account ${accountId || "unknown"}: ${transactionIds.length} transactions`);
 
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, cannot fetch transactions");
-    return;
-  }
-
-  if (transactionIds.length === 0) {
-    console.log("No transaction IDs provided, skipping");
     return;
   }
 
@@ -716,15 +823,122 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
  */
 async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): Promise<void> {
   const { itemId, accountId, transactionIds } = payload;
+  
+  // Handle case where transactionIds is missing or empty
+  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+    console.log(`Transactions updated event for item ${itemId}, account ${accountId || "unknown"}: No transaction IDs provided, fetching all transactions for account`);
+    
+    // If no transactionIds provided, fetch all transactions for the account/item
+    // This handles cases where the webhook doesn't include specific transaction IDs
+    if (!hasPluggyCredentials()) {
+      console.error("Missing Pluggy credentials, cannot fetch transactions");
+      return;
+    }
+
+    try {
+      const pluggyClient = getPluggyClient();
+      
+      // If accountId is provided, fetch all transactions for that account
+      if (accountId) {
+        const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
+        if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+          // Upsert all transactions (existing ones will be updated)
+          for (const transaction of transactionsResponse.results) {
+            const transactionData = transaction as any;
+            const transactionDate = transactionData.date 
+              ? (typeof transactionData.date === 'string' 
+                  ? transactionData.date 
+                  : new Date(transactionData.date).toISOString().split('T')[0])
+              : new Date().toISOString().split('T')[0];
+            
+            const transactionRecord: TransactionRecord = {
+              transaction_id: transactionData.id,
+              account_id: accountId,
+              date: transactionDate,
+              description: transactionData.description || "",
+              description_raw: transactionData.descriptionRaw,
+              amount: transactionData.amount,
+              amount_in_account_currency: transactionData.amountInAccountCurrency,
+              balance: transactionData.balance,
+              currency_code: transactionData.currencyCode,
+              category: transactionData.category,
+              category_id: transactionData.categoryId,
+              provider_code: transactionData.providerCode,
+              provider_id: transactionData.providerId,
+              status: transactionData.status,
+              type: transactionData.type,
+              operation_type: transactionData.operationType,
+              operation_category: transactionData.operationCategory,
+              payment_data: transactionData.paymentData,
+              credit_card_metadata: transactionData.creditCardMetadata,
+              merchant: transactionData.merchant,
+            };
+
+            await transactionsService.upsertTransaction(transactionRecord);
+          }
+          console.log(`Upserted ${transactionsResponse.results.length} updated transactions for account ${accountId}`);
+        }
+      } else {
+        // If no accountId, fetch all accounts for the item and sync all transactions
+        console.log("No accountId provided, fetching all accounts for item");
+        const accountsResponse = await pluggyClient.fetchAccounts(itemId);
+        if (accountsResponse.results && accountsResponse.results.length > 0) {
+          for (const account of accountsResponse.results) {
+            const accountData = account as any;
+            try {
+              const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
+              if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+                for (const transaction of transactionsResponse.results) {
+                  const transactionData = transaction as any;
+                  const transactionDate = transactionData.date 
+                    ? (typeof transactionData.date === 'string' 
+                        ? transactionData.date 
+                        : new Date(transactionData.date).toISOString().split('T')[0])
+                    : new Date().toISOString().split('T')[0];
+                  
+                  const transactionRecord: TransactionRecord = {
+                    transaction_id: transactionData.id,
+                    account_id: accountData.id,
+                    date: transactionDate,
+                    description: transactionData.description || "",
+                    description_raw: transactionData.descriptionRaw,
+                    amount: transactionData.amount,
+                    amount_in_account_currency: transactionData.amountInAccountCurrency,
+                    balance: transactionData.balance,
+                    currency_code: transactionData.currencyCode,
+                    category: transactionData.category,
+                    category_id: transactionData.categoryId,
+                    provider_code: transactionData.providerCode,
+                    provider_id: transactionData.providerId,
+                    status: transactionData.status,
+                    type: transactionData.type,
+                    operation_type: transactionData.operationType,
+                    operation_category: transactionData.operationCategory,
+                    payment_data: transactionData.paymentData,
+                    credit_card_metadata: transactionData.creditCardMetadata,
+                    merchant: transactionData.merchant,
+                  };
+
+                  await transactionsService.upsertTransaction(transactionRecord);
+                }
+              }
+            } catch (error) {
+              console.error(`Error fetching transactions for account ${accountData.id}:`, error);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`Error handling transactions updated event (no IDs):`, error);
+      throw error;
+    }
+    return;
+  }
+
   console.log(`Transactions updated for item ${itemId}, account ${accountId || "unknown"}: ${transactionIds.length} transactions`);
 
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, cannot fetch transactions");
-    return;
-  }
-
-  if (transactionIds.length === 0) {
-    console.log("No transaction IDs provided, skipping");
     return;
   }
 
@@ -844,14 +1058,19 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
  */
 async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): Promise<void> {
   const { itemId, accountId, transactionIds } = payload;
+  
+  // Handle case where transactionIds is missing or empty
+  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+    console.log(`Transactions deleted event for item ${itemId}, account ${accountId || "unknown"}: No transaction IDs provided, skipping deletion`);
+    return;
+  }
+
   console.log(`Transactions deleted for item ${itemId}, account ${accountId || "unknown"}: ${transactionIds.length} transactions`);
 
   try {
     // Delete transactions from database in batch
-    if (transactionIds.length > 0) {
-      await transactionsService.deleteMultipleTransactions(transactionIds);
-      console.log(`Deleted ${transactionIds.length} transactions`);
-    }
+    await transactionsService.deleteMultipleTransactions(transactionIds);
+    console.log(`Deleted ${transactionIds.length} transactions`);
   } catch (error) {
     console.error(`Error handling transactions deleted event:`, error);
     throw error;
