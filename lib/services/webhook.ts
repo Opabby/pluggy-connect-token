@@ -673,8 +673,53 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
         return; // Return early if authentication fails
       }
       
-      // If accountId is provided, fetch all transactions for that account
+      // If accountId is provided, ensure the account exists first, then fetch transactions
       if (accountId) {
+        // First, ensure the account exists in the database
+        // Fetch all accounts for the item from Pluggy API and find the specific account
+        try {
+          const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+            params: { itemId },
+            headers: {
+              "X-API-KEY": apiKey,
+              Accept: "application/json",
+            },
+          });
+          const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+          // Find the specific account by ID
+          const accountData = accountsData.find((acc: any) => acc.id === accountId);
+          
+          // If account found, upsert it to ensure it exists in the database
+          if (accountData) {
+            const accountRecord: AccountRecord = {
+              item_id: itemId,
+              account_id: accountData.id,
+              type: accountData.type,
+              subtype: accountData.subtype,
+              number: accountData.number,
+              name: accountData.name,
+              marketing_name: accountData.marketingName,
+              balance: accountData.balance,
+              currency_code: accountData.currencyCode,
+              owner: accountData.owner,
+              tax_number: accountData.taxNumber,
+              bank_data: accountData.bankData,
+              credit_data: accountData.creditData,
+              disaggregated_credit_limits: accountData.disaggregatedCreditLimits,
+            };
+            await accountsService.upsertAccount(accountRecord);
+            console.log(`Ensured account ${accountId} exists in database`);
+          } else {
+            console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
+            return; // Skip transaction sync if account doesn't exist
+          }
+        } catch (accountError) {
+          console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+          // Don't continue - if we can't fetch the account, we can't sync transactions
+          throw accountError;
+        }
+        
+        // Now fetch and upsert transactions for the account
         const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
           params: { accountId },
           headers: {
@@ -808,8 +853,53 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
       throw new Error("Failed to authenticate with Pluggy API");
     }
 
-    // If accountId is provided, fetch transactions for that account
+    // If accountId is provided, ensure the account exists first, then fetch transactions
     if (accountId) {
+      // First, ensure the account exists in the database
+      // Fetch all accounts for the item from Pluggy API and find the specific account
+      try {
+        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+          params: { itemId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+        // Find the specific account by ID
+        const accountData = accountsData.find((acc: any) => acc.id === accountId);
+        
+        // If account found, upsert it to ensure it exists in the database
+        if (accountData) {
+          const accountRecord: AccountRecord = {
+            item_id: itemId,
+            account_id: accountData.id,
+            type: accountData.type,
+            subtype: accountData.subtype,
+            number: accountData.number,
+            name: accountData.name,
+            marketing_name: accountData.marketingName,
+            balance: accountData.balance,
+            currency_code: accountData.currencyCode,
+            owner: accountData.owner,
+            tax_number: accountData.taxNumber,
+            bank_data: accountData.bankData,
+            credit_data: accountData.creditData,
+            disaggregated_credit_limits: accountData.disaggregatedCreditLimits,
+          };
+          await accountsService.upsertAccount(accountRecord);
+          console.log(`Ensured account ${accountId} exists in database`);
+        } else {
+          console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
+          return; // Skip transaction sync if account doesn't exist
+        }
+      } catch (accountError) {
+        console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+        // Don't continue - if we can't fetch the account, we can't sync transactions
+        throw accountError;
+      }
+      
+      // Now fetch and upsert transactions for the account
       const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
         params: { accountId },
         headers: {
@@ -964,8 +1054,53 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
         return; // Return early if authentication fails
       }
       
-      // If accountId is provided, fetch all transactions for that account
+      // If accountId is provided, ensure the account exists first, then fetch transactions
       if (accountId) {
+        // First, ensure the account exists in the database
+        // Fetch all accounts for the item from Pluggy API and find the specific account
+        try {
+          const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+            params: { itemId },
+            headers: {
+              "X-API-KEY": apiKey,
+              Accept: "application/json",
+            },
+          });
+          const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+          // Find the specific account by ID
+          const accountData = accountsData.find((acc: any) => acc.id === accountId);
+          
+          // If account found, upsert it to ensure it exists in the database
+          if (accountData) {
+            const accountRecord: AccountRecord = {
+              item_id: itemId,
+              account_id: accountData.id,
+              type: accountData.type,
+              subtype: accountData.subtype,
+              number: accountData.number,
+              name: accountData.name,
+              marketing_name: accountData.marketingName,
+              balance: accountData.balance,
+              currency_code: accountData.currencyCode,
+              owner: accountData.owner,
+              tax_number: accountData.taxNumber,
+              bank_data: accountData.bankData,
+              credit_data: accountData.creditData,
+              disaggregated_credit_limits: accountData.disaggregatedCreditLimits,
+            };
+            await accountsService.upsertAccount(accountRecord);
+            console.log(`Ensured account ${accountId} exists in database`);
+          } else {
+            console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
+            return; // Skip transaction sync if account doesn't exist
+          }
+        } catch (accountError) {
+          console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+          // Don't continue - if we can't fetch the account, we can't sync transactions
+          throw accountError;
+        }
+        
+        // Now fetch and upsert transactions for the account
         const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
           params: { accountId },
           headers: {
@@ -1099,8 +1234,53 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
       throw new Error("Failed to authenticate with Pluggy API");
     }
 
-    // If accountId is provided, fetch transactions for that account
+    // If accountId is provided, ensure the account exists first, then fetch transactions
     if (accountId) {
+      // First, ensure the account exists in the database
+      // Fetch all accounts for the item from Pluggy API and find the specific account
+      try {
+        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+          params: { itemId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+        // Find the specific account by ID
+        const accountData = accountsData.find((acc: any) => acc.id === accountId);
+        
+        // If account found, upsert it to ensure it exists in the database
+        if (accountData) {
+          const accountRecord: AccountRecord = {
+            item_id: itemId,
+            account_id: accountData.id,
+            type: accountData.type,
+            subtype: accountData.subtype,
+            number: accountData.number,
+            name: accountData.name,
+            marketing_name: accountData.marketingName,
+            balance: accountData.balance,
+            currency_code: accountData.currencyCode,
+            owner: accountData.owner,
+            tax_number: accountData.taxNumber,
+            bank_data: accountData.bankData,
+            credit_data: accountData.creditData,
+            disaggregated_credit_limits: accountData.disaggregatedCreditLimits,
+          };
+          await accountsService.upsertAccount(accountRecord);
+          console.log(`Ensured account ${accountId} exists in database`);
+        } else {
+          console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
+          return; // Skip transaction sync if account doesn't exist
+        }
+      } catch (accountError) {
+        console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+        // Don't continue - if we can't fetch the account, we can't sync transactions
+        throw accountError;
+      }
+      
+      // Now fetch and upsert transactions for the account
       const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
         params: { accountId },
         headers: {
