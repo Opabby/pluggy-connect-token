@@ -48,26 +48,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Log the webhook event
     console.log(`Received webhook event: ${payload.event} (eventId: ${payload.eventId})`);
 
-    // Process critical parts synchronously (item upsert) to ensure data is saved
-    // Then respond quickly to Pluggy, and do heavy syncing asynchronously
-    try {
-      // Process the webhook event - critical parts first
-      await processWebhookEvent(payload);
-      console.log(`Successfully processed webhook event: ${payload.event} (eventId: ${payload.eventId})`);
-    } catch (error) {
-      // Log error but still respond with success to avoid retries
-      // The error will be visible in logs for debugging
-      console.error(`Error processing webhook event ${payload.event} (eventId: ${payload.eventId}):`, error);
-      console.error("Error details:", error instanceof Error ? error.stack : error);
-    }
-
-    // IMPORTANT: Respond with 2XX status after processing
-    // This ensures the processing completes before Vercel terminates the function
-    // For most events, processing should complete within 5 seconds
+    // IMPORTANT: Respond with 2XX status IMMEDIATELY to avoid retries
+    // Pluggy requires a response within 5 seconds, so we respond first
     res.status(200).json({ 
       received: true,
       event: payload.event,
       eventId: payload.eventId,
+    });
+
+    // Process webhook event asynchronously AFTER responding
+    // This ensures Pluggy gets a quick response, and processing continues in the background
+    // Use setImmediate to ensure the response is sent first, then process
+    setImmediate(async () => {
+      try {
+        await processWebhookEvent(payload);
+        console.log(`Successfully processed webhook event: ${payload.event} (eventId: ${payload.eventId})`);
+      } catch (error) {
+        // Log error but don't block - we've already responded to Pluggy
+        // The error will be visible in logs for debugging
+        console.error(`Error processing webhook event ${payload.event} (eventId: ${payload.eventId}):`, error);
+        console.error("Error details:", error instanceof Error ? error.stack : error);
+      }
     });
   } catch (error) {
     console.error("Error in webhook handler:", error);

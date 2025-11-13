@@ -158,17 +158,25 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
       apiKey = await getPluggyApiKey();
     } catch (authError) {
       console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
+      // Don't throw - log and return gracefully
+      return;
     }
 
     // Fetch item using axios (same pattern as working endpoints)
-    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
-      headers: {
-        "X-API-KEY": apiKey,
-        Accept: "application/json",
-      },
-    });
-    const item = itemResponse.data;
+    let item: any;
+    try {
+      const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      item = itemResponse.data;
+    } catch (itemError) {
+      console.error(`Error fetching item ${itemId} from Pluggy API:`, itemError);
+      // Don't throw - log and return gracefully
+      return;
+    }
 
     // Convert Pluggy item to our record format
     // Use type assertion to handle SDK response structure
@@ -202,26 +210,30 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
       console.log(`Item ${itemId} successfully upserted to database:`, JSON.stringify(upsertedItem, null, 2));
     } catch (upsertError) {
       console.error(`Failed to upsert item ${itemId}:`, upsertError);
-      throw upsertError; // Re-throw to be caught by outer catch block
+      // Don't throw - log and return gracefully
+      // The webhook handler has already responded, so we just log the error
+      return;
     }
 
     // For created/updated/login_succeeded events, sync all related data
     // Always sync data when item is created/updated/login_succeeded (regardless of status)
     // The status check is handled inside syncItemData if needed
+    // Do this asynchronously to avoid blocking - webhook has already responded
     if (event === "item/created" || event === "item/updated" || event === "item/login_succeeded") {
       console.log(`Starting sync for item ${itemId}...`);
-      try {
-        await syncItemData(itemId);
+      // Process sync asynchronously - don't await
+      syncItemData(itemId).then(() => {
         console.log(`Successfully completed sync for item ${itemId}`);
-      } catch (syncError) {
-        // Log sync error but don't fail the webhook - item is already saved
+      }).catch((syncError) => {
+        // Log sync error but don't fail - item is already saved
         console.error(`Error syncing data for item ${itemId}:`, syncError);
         console.error("Sync error details:", syncError instanceof Error ? syncError.stack : syncError);
-      }
+      });
     }
   } catch (error) {
     console.error(`Error handling item event for ${itemId}:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
+    // The webhook handler has already responded, so we just log the error
   }
 }
 
@@ -280,17 +292,25 @@ async function handleItemStatusEvent(payload: ItemWebhookPayload): Promise<void>
       apiKey = await getPluggyApiKey();
     } catch (authError) {
       console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
+      // Don't throw - log and return gracefully
+      return;
     }
 
     // Fetch item using axios (same pattern as working endpoints)
-    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
-      headers: {
-        "X-API-KEY": apiKey,
-        Accept: "application/json",
-      },
-    });
-    const item = itemResponse.data;
+    let item: any;
+    try {
+      const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      item = itemResponse.data;
+    } catch (itemError) {
+      console.error(`Error fetching item ${itemId} from Pluggy API:`, itemError);
+      // Don't throw - log and return gracefully
+      return;
+    }
 
     // Update item status in database using upsert
     // Use type assertion to handle SDK response structure
@@ -315,11 +335,16 @@ async function handleItemStatusEvent(payload: ItemWebhookPayload): Promise<void>
       secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
     };
 
-    await itemsService.upsertItem(itemRecord);
-    console.log(`Item ${itemId} status updated to ${itemData.status}`);
+    try {
+      await itemsService.upsertItem(itemRecord);
+      console.log(`Item ${itemId} status updated to ${itemData.status}`);
+    } catch (upsertError) {
+      console.error(`Error upserting item ${itemId}:`, upsertError);
+      // Don't throw - log and return gracefully
+    }
   } catch (error) {
     console.error(`Error handling item status event for ${itemId}:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
   }
 }
 
@@ -631,7 +656,8 @@ async function syncItemData(itemId: string): Promise<void> {
     }
   } catch (error) {
     console.error(`Error syncing item data for ${itemId}:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
+    // This is called asynchronously, so errors should not bubble up
   }
 }
 
@@ -715,55 +741,72 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
           }
         } catch (accountError) {
           console.error(`Error fetching/upserting account ${accountId}:`, accountError);
-          // Don't continue - if we can't fetch the account, we can't sync transactions
-          throw accountError;
+          // Log error but don't throw - try to sync transactions anyway
+          // The transaction upsert will fail with a foreign key error if account doesn't exist,
+          // but at least we tried, and we won't block the webhook response
         }
         
         // Now fetch and upsert transactions for the account
-        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-          params: { accountId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-        if (transactionsData.length > 0) {
-          // Upsert all transactions (new ones will be created, existing ones updated)
-          for (const transaction of transactionsData) {
-            const transactionData = transaction as any;
-            const transactionDate = transactionData.date 
-              ? (typeof transactionData.date === 'string' 
-                  ? transactionData.date 
-                  : new Date(transactionData.date).toISOString().split('T')[0])
-              : new Date().toISOString().split('T')[0];
-            
-            const transactionRecord: TransactionRecord = {
-              transaction_id: transactionData.id,
-              account_id: accountId,
-              date: transactionDate,
-              description: transactionData.description || "",
-              description_raw: transactionData.descriptionRaw,
-              amount: transactionData.amount,
-              amount_in_account_currency: transactionData.amountInAccountCurrency,
-              balance: transactionData.balance,
-              currency_code: transactionData.currencyCode,
-              category: transactionData.category,
-              category_id: transactionData.categoryId,
-              provider_code: transactionData.providerCode,
-              provider_id: transactionData.providerId,
-              status: transactionData.status,
-              type: transactionData.type,
-              operation_type: transactionData.operationType,
-              operation_category: transactionData.operationCategory,
-              payment_data: transactionData.paymentData,
-              credit_card_metadata: transactionData.creditCardMetadata,
-              merchant: transactionData.merchant,
-            };
+        // Wrap in try-catch to handle errors gracefully
+        try {
+          const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+            params: { accountId },
+            headers: {
+              "X-API-KEY": apiKey,
+              Accept: "application/json",
+            },
+          });
+          const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+          if (transactionsData.length > 0) {
+            // Upsert all transactions (new ones will be created, existing ones updated)
+            // Catch errors per transaction to avoid blocking the entire sync
+            let successCount = 0;
+            let errorCount = 0;
+            for (const transaction of transactionsData) {
+              try {
+                const transactionData = transaction as any;
+                const transactionDate = transactionData.date 
+                  ? (typeof transactionData.date === 'string' 
+                      ? transactionData.date 
+                      : new Date(transactionData.date).toISOString().split('T')[0])
+                  : new Date().toISOString().split('T')[0];
+                
+                const transactionRecord: TransactionRecord = {
+                  transaction_id: transactionData.id,
+                  account_id: accountId,
+                  date: transactionDate,
+                  description: transactionData.description || "",
+                  description_raw: transactionData.descriptionRaw,
+                  amount: transactionData.amount,
+                  amount_in_account_currency: transactionData.amountInAccountCurrency,
+                  balance: transactionData.balance,
+                  currency_code: transactionData.currencyCode,
+                  category: transactionData.category,
+                  category_id: transactionData.categoryId,
+                  provider_code: transactionData.providerCode,
+                  provider_id: transactionData.providerId,
+                  status: transactionData.status,
+                  type: transactionData.type,
+                  operation_type: transactionData.operationType,
+                  operation_category: transactionData.operationCategory,
+                  payment_data: transactionData.paymentData,
+                  credit_card_metadata: transactionData.creditCardMetadata,
+                  merchant: transactionData.merchant,
+                };
 
-            await transactionsService.upsertTransaction(transactionRecord);
+                await transactionsService.upsertTransaction(transactionRecord);
+                successCount++;
+              } catch (transactionError) {
+                errorCount++;
+                console.error(`Error upserting transaction ${transaction.id}:`, transactionError);
+                // Continue with next transaction
+              }
+            }
+            console.log(`Upserted ${successCount} transactions for account ${accountId}${errorCount > 0 ? ` (${errorCount} errors)` : ''}`);
           }
-          console.log(`Upserted ${transactionsData.length} transactions for account ${accountId}`);
+        } catch (transactionFetchError) {
+          console.error(`Error fetching transactions for account ${accountId}:`, transactionFetchError);
+          // Don't throw - log and continue
         }
       } else {
         // If no accountId, fetch all accounts for the item and sync all transactions
@@ -831,7 +874,9 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
       }
     } catch (error) {
       console.error(`Error handling transactions created event (no IDs):`, error);
-      throw error;
+      // Don't throw - log and return gracefully
+      // This ensures the webhook handler can still respond with 200
+      return;
     }
     return;
   }
@@ -850,7 +895,8 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
       apiKey = await getPluggyApiKey();
     } catch (authError) {
       console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
+      // Don't throw - log and return gracefully
+      return;
     }
 
     // If accountId is provided, ensure the account exists first, then fetch transactions
@@ -893,62 +939,79 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
           console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
           return; // Skip transaction sync if account doesn't exist
         }
-      } catch (accountError) {
-        console.error(`Error fetching/upserting account ${accountId}:`, accountError);
-        // Don't continue - if we can't fetch the account, we can't sync transactions
-        throw accountError;
-      }
+        } catch (accountError) {
+          console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+          // Log error but don't throw - try to sync transactions anyway
+          // The transaction upsert will fail with a foreign key error if account doesn't exist,
+          // but at least we tried, and we won't block the webhook response
+        }
       
       // Now fetch and upsert transactions for the account
-      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-        params: { accountId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-      if (transactionsData.length > 0) {
-        // Filter to only the created transactions and upsert them
-        const createdTransactions = transactionsData.filter((t: any) =>
-          transactionIds.includes(t.id)
-        );
+      // Wrap in try-catch to handle errors gracefully
+      try {
+        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+          params: { accountId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+        if (transactionsData.length > 0) {
+          // Filter to only the created transactions and upsert them
+          const createdTransactions = transactionsData.filter((t: any) =>
+            transactionIds.includes(t.id)
+          );
 
-        for (const transaction of createdTransactions) {
-          const transactionData = transaction as any;
-          // Handle date - convert Date objects to ISO string format (YYYY-MM-DD)
-          const transactionDate = transactionData.date 
-            ? (typeof transactionData.date === 'string' 
-                ? transactionData.date 
-                : new Date(transactionData.date).toISOString().split('T')[0])
-            : new Date().toISOString().split('T')[0];
-          
-          const transactionRecord: TransactionRecord = {
-            transaction_id: transactionData.id,
-            account_id: accountId,
-            date: transactionDate,
-            description: transactionData.description || "",
-            description_raw: transactionData.descriptionRaw,
-            amount: transactionData.amount,
-            amount_in_account_currency: transactionData.amountInAccountCurrency,
-            balance: transactionData.balance,
-            currency_code: transactionData.currencyCode,
-            category: transactionData.category,
-            category_id: transactionData.categoryId,
-            provider_code: transactionData.providerCode,
-            provider_id: transactionData.providerId,
-            status: transactionData.status,
-            type: transactionData.type,
-            operation_type: transactionData.operationType,
-            operation_category: transactionData.operationCategory,
-            payment_data: transactionData.paymentData,
-            credit_card_metadata: transactionData.creditCardMetadata,
-            merchant: transactionData.merchant,
-          };
+          // Catch errors per transaction to avoid blocking the entire sync
+          let successCount = 0;
+          let errorCount = 0;
+          for (const transaction of createdTransactions) {
+            try {
+              const transactionData = transaction as any;
+              // Handle date - convert Date objects to ISO string format (YYYY-MM-DD)
+              const transactionDate = transactionData.date 
+                ? (typeof transactionData.date === 'string' 
+                    ? transactionData.date 
+                    : new Date(transactionData.date).toISOString().split('T')[0])
+                : new Date().toISOString().split('T')[0];
+              
+              const transactionRecord: TransactionRecord = {
+                transaction_id: transactionData.id,
+                account_id: accountId,
+                date: transactionDate,
+                description: transactionData.description || "",
+                description_raw: transactionData.descriptionRaw,
+                amount: transactionData.amount,
+                amount_in_account_currency: transactionData.amountInAccountCurrency,
+                balance: transactionData.balance,
+                currency_code: transactionData.currencyCode,
+                category: transactionData.category,
+                category_id: transactionData.categoryId,
+                provider_code: transactionData.providerCode,
+                provider_id: transactionData.providerId,
+                status: transactionData.status,
+                type: transactionData.type,
+                operation_type: transactionData.operationType,
+                operation_category: transactionData.operationCategory,
+                payment_data: transactionData.paymentData,
+                credit_card_metadata: transactionData.creditCardMetadata,
+                merchant: transactionData.merchant,
+              };
 
-          await transactionsService.upsertTransaction(transactionRecord);
+              await transactionsService.upsertTransaction(transactionRecord);
+              successCount++;
+            } catch (transactionError) {
+              errorCount++;
+              console.error(`Error upserting transaction ${transaction.id}:`, transactionError);
+              // Continue with next transaction
+            }
+          }
+          console.log(`Upserted ${successCount} new transactions${errorCount > 0 ? ` (${errorCount} errors)` : ''}`);
         }
-        console.log(`Upserted ${createdTransactions.length} new transactions`);
+      } catch (transactionFetchError) {
+        console.error(`Error fetching transactions for account ${accountId}:`, transactionFetchError);
+        // Don't throw - log and continue
       }
     } else {
       // If accountId is not provided, fetch all accounts for the item and search for transactions
@@ -1022,7 +1085,8 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
     }
   } catch (error) {
     console.error(`Error handling transactions created event:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
+    // This ensures the webhook handler can still respond with 200
   }
 }
 
@@ -1096,55 +1160,72 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
           }
         } catch (accountError) {
           console.error(`Error fetching/upserting account ${accountId}:`, accountError);
-          // Don't continue - if we can't fetch the account, we can't sync transactions
-          throw accountError;
+          // Log error but don't throw - try to sync transactions anyway
+          // The transaction upsert will fail with a foreign key error if account doesn't exist,
+          // but at least we tried, and we won't block the webhook response
         }
         
         // Now fetch and upsert transactions for the account
-        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-          params: { accountId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-        if (transactionsData.length > 0) {
-          // Upsert all transactions (existing ones will be updated)
-          for (const transaction of transactionsData) {
-            const transactionData = transaction as any;
-            const transactionDate = transactionData.date 
-              ? (typeof transactionData.date === 'string' 
-                  ? transactionData.date 
-                  : new Date(transactionData.date).toISOString().split('T')[0])
-              : new Date().toISOString().split('T')[0];
-            
-            const transactionRecord: TransactionRecord = {
-              transaction_id: transactionData.id,
-              account_id: accountId,
-              date: transactionDate,
-              description: transactionData.description || "",
-              description_raw: transactionData.descriptionRaw,
-              amount: transactionData.amount,
-              amount_in_account_currency: transactionData.amountInAccountCurrency,
-              balance: transactionData.balance,
-              currency_code: transactionData.currencyCode,
-              category: transactionData.category,
-              category_id: transactionData.categoryId,
-              provider_code: transactionData.providerCode,
-              provider_id: transactionData.providerId,
-              status: transactionData.status,
-              type: transactionData.type,
-              operation_type: transactionData.operationType,
-              operation_category: transactionData.operationCategory,
-              payment_data: transactionData.paymentData,
-              credit_card_metadata: transactionData.creditCardMetadata,
-              merchant: transactionData.merchant,
-            };
+        // Wrap in try-catch to handle errors gracefully
+        try {
+          const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+            params: { accountId },
+            headers: {
+              "X-API-KEY": apiKey,
+              Accept: "application/json",
+            },
+          });
+          const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+          if (transactionsData.length > 0) {
+            // Upsert all transactions (existing ones will be updated)
+            // Catch errors per transaction to avoid blocking the entire sync
+            let successCount = 0;
+            let errorCount = 0;
+            for (const transaction of transactionsData) {
+              try {
+                const transactionData = transaction as any;
+                const transactionDate = transactionData.date 
+                  ? (typeof transactionData.date === 'string' 
+                      ? transactionData.date 
+                      : new Date(transactionData.date).toISOString().split('T')[0])
+                  : new Date().toISOString().split('T')[0];
+                
+                const transactionRecord: TransactionRecord = {
+                  transaction_id: transactionData.id,
+                  account_id: accountId,
+                  date: transactionDate,
+                  description: transactionData.description || "",
+                  description_raw: transactionData.descriptionRaw,
+                  amount: transactionData.amount,
+                  amount_in_account_currency: transactionData.amountInAccountCurrency,
+                  balance: transactionData.balance,
+                  currency_code: transactionData.currencyCode,
+                  category: transactionData.category,
+                  category_id: transactionData.categoryId,
+                  provider_code: transactionData.providerCode,
+                  provider_id: transactionData.providerId,
+                  status: transactionData.status,
+                  type: transactionData.type,
+                  operation_type: transactionData.operationType,
+                  operation_category: transactionData.operationCategory,
+                  payment_data: transactionData.paymentData,
+                  credit_card_metadata: transactionData.creditCardMetadata,
+                  merchant: transactionData.merchant,
+                };
 
-            await transactionsService.upsertTransaction(transactionRecord);
+                await transactionsService.upsertTransaction(transactionRecord);
+                successCount++;
+              } catch (transactionError) {
+                errorCount++;
+                console.error(`Error upserting transaction ${transaction.id}:`, transactionError);
+                // Continue with next transaction
+              }
+            }
+            console.log(`Upserted ${successCount} updated transactions for account ${accountId}${errorCount > 0 ? ` (${errorCount} errors)` : ''}`);
           }
-          console.log(`Upserted ${transactionsData.length} updated transactions for account ${accountId}`);
+        } catch (transactionFetchError) {
+          console.error(`Error fetching transactions for account ${accountId}:`, transactionFetchError);
+          // Don't throw - log and continue
         }
       } else {
         // If no accountId, fetch all accounts for the item and sync all transactions
@@ -1212,7 +1293,9 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
       }
     } catch (error) {
       console.error(`Error handling transactions updated event (no IDs):`, error);
-      throw error;
+      // Don't throw - log and return gracefully
+      // This ensures the webhook handler can still respond with 200
+      return;
     }
     return;
   }
@@ -1231,7 +1314,8 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
       apiKey = await getPluggyApiKey();
     } catch (authError) {
       console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
+      // Don't throw - log and return gracefully
+      return;
     }
 
     // If accountId is provided, ensure the account exists first, then fetch transactions
@@ -1274,62 +1358,79 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
           console.warn(`Account ${accountId} not found in Pluggy API for item ${itemId}, skipping transaction sync`);
           return; // Skip transaction sync if account doesn't exist
         }
-      } catch (accountError) {
-        console.error(`Error fetching/upserting account ${accountId}:`, accountError);
-        // Don't continue - if we can't fetch the account, we can't sync transactions
-        throw accountError;
-      }
+        } catch (accountError) {
+          console.error(`Error fetching/upserting account ${accountId}:`, accountError);
+          // Log error but don't throw - try to sync transactions anyway
+          // The transaction upsert will fail with a foreign key error if account doesn't exist,
+          // but at least we tried, and we won't block the webhook response
+        }
       
       // Now fetch and upsert transactions for the account
-      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-        params: { accountId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-      if (transactionsData.length > 0) {
-        // Filter to only the updated transactions and upsert them
-        const updatedTransactions = transactionsData.filter((t: any) =>
-          transactionIds.includes(t.id)
-        );
+      // Wrap in try-catch to handle errors gracefully
+      try {
+        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+          params: { accountId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+        if (transactionsData.length > 0) {
+          // Filter to only the updated transactions and upsert them
+          const updatedTransactions = transactionsData.filter((t: any) =>
+            transactionIds.includes(t.id)
+          );
 
-        for (const transaction of updatedTransactions) {
-          const transactionData = transaction as any;
-          // Handle date - convert Date objects to ISO string format (YYYY-MM-DD)
-          const transactionDate = transactionData.date 
-            ? (typeof transactionData.date === 'string' 
-                ? transactionData.date 
-                : new Date(transactionData.date).toISOString().split('T')[0])
-            : new Date().toISOString().split('T')[0];
-          
-          const transactionRecord: TransactionRecord = {
-            transaction_id: transactionData.id,
-            account_id: accountId,
-            date: transactionDate,
-            description: transactionData.description || "",
-            description_raw: transactionData.descriptionRaw,
-            amount: transactionData.amount,
-            amount_in_account_currency: transactionData.amountInAccountCurrency,
-            balance: transactionData.balance,
-            currency_code: transactionData.currencyCode,
-            category: transactionData.category,
-            category_id: transactionData.categoryId,
-            provider_code: transactionData.providerCode,
-            provider_id: transactionData.providerId,
-            status: transactionData.status,
-            type: transactionData.type,
-            operation_type: transactionData.operationType,
-            operation_category: transactionData.operationCategory,
-            payment_data: transactionData.paymentData,
-            credit_card_metadata: transactionData.creditCardMetadata,
-            merchant: transactionData.merchant,
-          };
+          // Catch errors per transaction to avoid blocking the entire sync
+          let successCount = 0;
+          let errorCount = 0;
+          for (const transaction of updatedTransactions) {
+            try {
+              const transactionData = transaction as any;
+              // Handle date - convert Date objects to ISO string format (YYYY-MM-DD)
+              const transactionDate = transactionData.date 
+                ? (typeof transactionData.date === 'string' 
+                    ? transactionData.date 
+                    : new Date(transactionData.date).toISOString().split('T')[0])
+                : new Date().toISOString().split('T')[0];
+              
+              const transactionRecord: TransactionRecord = {
+                transaction_id: transactionData.id,
+                account_id: accountId,
+                date: transactionDate,
+                description: transactionData.description || "",
+                description_raw: transactionData.descriptionRaw,
+                amount: transactionData.amount,
+                amount_in_account_currency: transactionData.amountInAccountCurrency,
+                balance: transactionData.balance,
+                currency_code: transactionData.currencyCode,
+                category: transactionData.category,
+                category_id: transactionData.categoryId,
+                provider_code: transactionData.providerCode,
+                provider_id: transactionData.providerId,
+                status: transactionData.status,
+                type: transactionData.type,
+                operation_type: transactionData.operationType,
+                operation_category: transactionData.operationCategory,
+                payment_data: transactionData.paymentData,
+                credit_card_metadata: transactionData.creditCardMetadata,
+                merchant: transactionData.merchant,
+              };
 
-          await transactionsService.upsertTransaction(transactionRecord);
+              await transactionsService.upsertTransaction(transactionRecord);
+              successCount++;
+            } catch (transactionError) {
+              errorCount++;
+              console.error(`Error upserting transaction ${transaction.id}:`, transactionError);
+              // Continue with next transaction
+            }
+          }
+          console.log(`Upserted ${successCount} updated transactions${errorCount > 0 ? ` (${errorCount} errors)` : ''}`);
         }
-        console.log(`Upserted ${updatedTransactions.length} updated transactions`);
+      } catch (transactionFetchError) {
+        console.error(`Error fetching transactions for account ${accountId}:`, transactionFetchError);
+        // Don't throw - log and continue
       }
     } else {
       // If accountId is not provided, fetch all accounts for the item and search for transactions
@@ -1403,7 +1504,8 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
     }
   } catch (error) {
     console.error(`Error handling transactions updated event:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
+    // This ensures the webhook handler can still respond with 200
   }
 }
 
@@ -1428,7 +1530,8 @@ async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): P
     console.log(`Deleted ${transactionIds.length} transactions`);
   } catch (error) {
     console.error(`Error handling transactions deleted event:`, error);
-    throw error;
+    // Don't throw - log and return gracefully
+    // This ensures the webhook handler can still respond with 200
   }
 }
 
