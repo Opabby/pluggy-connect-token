@@ -48,28 +48,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Log the webhook event
     console.log(`Received webhook event: ${payload.event} (eventId: ${payload.eventId})`);
 
-    // IMPORTANT: Respond immediately with 2XX status
-    // This must happen within 5 seconds to avoid retries
+    // Process critical parts synchronously (item upsert) to ensure data is saved
+    // Then respond quickly to Pluggy, and do heavy syncing asynchronously
+    try {
+      // Process the webhook event - critical parts first
+      await processWebhookEvent(payload);
+      console.log(`Successfully processed webhook event: ${payload.event} (eventId: ${payload.eventId})`);
+    } catch (error) {
+      // Log error but still respond with success to avoid retries
+      // The error will be visible in logs for debugging
+      console.error(`Error processing webhook event ${payload.event} (eventId: ${payload.eventId}):`, error);
+      console.error("Error details:", error instanceof Error ? error.stack : error);
+    }
+
+    // IMPORTANT: Respond with 2XX status after processing
+    // This ensures the processing completes before Vercel terminates the function
+    // For most events, processing should complete within 5 seconds
     res.status(200).json({ 
       received: true,
       event: payload.event,
       eventId: payload.eventId,
-    });
-
-    // Process the webhook event asynchronously AFTER responding
-    // This allows processing to take longer than 5 seconds without triggering retries
-    setImmediate(async () => {
-      try {
-        await processWebhookEvent(payload);
-        console.log(`Successfully processed webhook event: ${payload.event} (eventId: ${payload.eventId})`);
-      } catch (error) {
-        // Log error but don't throw - we've already responded with success
-        console.error(`Error processing webhook event ${payload.event} (eventId: ${payload.eventId}):`, error);
-        // In a production environment, you might want to:
-        // - Send error to monitoring service (e.g., Sentry)
-        // - Queue for retry processing
-        // - Store in dead letter queue
-      }
     });
   } catch (error) {
     console.error("Error in webhook handler:", error);

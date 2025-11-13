@@ -167,14 +167,30 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
     };
 
     // Upsert item in database
-    await itemsService.upsertItem(itemRecord);
-    console.log(`Item ${itemId} upserted to database`);
+    console.log(`Attempting to upsert item ${itemId} to database...`);
+    console.log(`Item record:`, JSON.stringify(itemRecord, null, 2));
+    
+    try {
+      const upsertedItem = await itemsService.upsertItem(itemRecord);
+      console.log(`Item ${itemId} successfully upserted to database:`, JSON.stringify(upsertedItem, null, 2));
+    } catch (upsertError) {
+      console.error(`Failed to upsert item ${itemId}:`, upsertError);
+      throw upsertError; // Re-throw to be caught by outer catch block
+    }
 
     // For created/updated/login_succeeded events, sync all related data
     // Always sync data when item is created/updated/login_succeeded (regardless of status)
     // The status check is handled inside syncItemData if needed
     if (event === "item/created" || event === "item/updated" || event === "item/login_succeeded") {
-      await syncItemData(itemId);
+      console.log(`Starting sync for item ${itemId}...`);
+      try {
+        await syncItemData(itemId);
+        console.log(`Successfully completed sync for item ${itemId}`);
+      } catch (syncError) {
+        // Log sync error but don't fail the webhook - item is already saved
+        console.error(`Error syncing data for item ${itemId}:`, syncError);
+        console.error("Sync error details:", syncError instanceof Error ? syncError.stack : syncError);
+      }
     }
   } catch (error) {
     console.error(`Error handling item event for ${itemId}:`, error);

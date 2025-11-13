@@ -3,6 +3,8 @@ import { supabase } from "../supabase";
 
 export const itemsService = {
   async upsertItem(itemData: PluggyItemRecord): Promise<PluggyItemRecord> {
+    console.log("Attempting to upsert item:", JSON.stringify(itemData, null, 2));
+    
     const { data, error } = await supabase
       .from("pluggy_items")
       .upsert(itemData, {
@@ -14,9 +16,14 @@ export const itemsService = {
 
     if (error) {
       console.error("Error upserting item:", error);
-      throw new Error(`Failed to upsert item: ${error.message}`);
+      console.error("Error code:", error.code);
+      console.error("Error message:", error.message);
+      console.error("Error details:", error.details);
+      console.error("Error hint:", error.hint);
+      throw new Error(`Failed to upsert item: ${error.message} (code: ${error.code})`);
     }
 
+    console.log("Item successfully upserted:", JSON.stringify(data, null, 2));
     return data;
   },
 
