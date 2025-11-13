@@ -1,4 +1,4 @@
-import { getPluggyClient, hasPluggyCredentials } from "../pluggyClient";
+import { hasPluggyCredentials } from "../pluggyClient";
 import { itemsService } from "./items";
 import { accountsService } from "./accounts";
 import { transactionsService } from "./transactions";
@@ -27,6 +27,18 @@ import type {
 import axios from "axios";
 
 const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
+
+/**
+ * Get Pluggy API key by authenticating with client credentials
+ * Uses the same pattern as other working endpoints (api/identity.ts, api/investments.ts, etc.)
+ */
+async function getPluggyApiKey(): Promise<string> {
+  const authResponse = await axios.post("https://api.pluggy.ai/auth", {
+    clientId: PLUGGY_CLIENT_ID,
+    clientSecret: PLUGGY_CLIENT_SECRET,
+  });
+  return authResponse.data.apiKey;
+}
 
 /**
  * Process webhook events asynchronously
@@ -140,9 +152,23 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
 
   try {
     // IMPORTANT: Fetch latest item data from Pluggy API first (as per documentation)
-    // The SDK client handles authentication automatically
-    const pluggyClient = getPluggyClient();
-    const item = await pluggyClient.fetchItem(itemId);
+    // Use the same authentication pattern as working endpoints (api/identity.ts, api/investments.ts, etc.)
+    let apiKey: string;
+    try {
+      apiKey = await getPluggyApiKey();
+    } catch (authError) {
+      console.error("Error authenticating with Pluggy API:", authError);
+      throw new Error("Failed to authenticate with Pluggy API");
+    }
+
+    // Fetch item using axios (same pattern as working endpoints)
+    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
+      headers: {
+        "X-API-KEY": apiKey,
+        Accept: "application/json",
+      },
+    });
+    const item = itemResponse.data;
 
     // Convert Pluggy item to our record format
     // Use type assertion to handle SDK response structure
@@ -248,9 +274,23 @@ async function handleItemStatusEvent(payload: ItemWebhookPayload): Promise<void>
     }
 
     // Fetch latest item data from Pluggy API
-    // The SDK client handles authentication automatically
-    const pluggyClient = getPluggyClient();
-    const item = await pluggyClient.fetchItem(itemId);
+    // Use the same authentication pattern as working endpoints
+    let apiKey: string;
+    try {
+      apiKey = await getPluggyApiKey();
+    } catch (authError) {
+      console.error("Error authenticating with Pluggy API:", authError);
+      throw new Error("Failed to authenticate with Pluggy API");
+    }
+
+    // Fetch item using axios (same pattern as working endpoints)
+    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
+      headers: {
+        "X-API-KEY": apiKey,
+        Accept: "application/json",
+      },
+    });
+    const item = itemResponse.data;
 
     // Update item status in database using upsert
     // Use type assertion to handle SDK response structure
@@ -296,15 +336,28 @@ async function syncItemData(itemId: string): Promise<void> {
   console.log(`Syncing data for item: ${itemId}`);
 
   try {
-    // Get Pluggy client (handles authentication automatically)
-    const pluggyClient = getPluggyClient();
-
-    // Fetch and sync accounts
+    // Get API key first (same pattern as working endpoints)
+    let apiKey: string;
     try {
-      const accountsResponse = await pluggyClient.fetchAccounts(itemId);
-      if (accountsResponse.results && accountsResponse.results.length > 0) {
+      apiKey = await getPluggyApiKey();
+    } catch (authError) {
+      console.error("Error authenticating with Pluggy API:", authError);
+      return; // Return early if authentication fails
+    }
+
+    // Fetch and sync accounts using axios (same pattern as working endpoints)
+    try {
+      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+        params: { itemId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+      if (accountsData.length > 0) {
         // Map accounts to our record format (matching api/items.ts pattern)
-        const accountsToUpsert: AccountRecord[] = accountsResponse.results.map(
+        const accountsToUpsert: AccountRecord[] = accountsData.map(
           (account: any) => ({
             item_id: itemId,
             account_id: account.id,
@@ -328,13 +381,20 @@ async function syncItemData(itemId: string): Promise<void> {
         console.log(`Synced ${accountsToUpsert.length} accounts for item ${itemId}`);
 
         // Sync transactions for each account
-        for (const account of accountsResponse.results) {
+        for (const account of accountsData) {
           const accountData = account as any;
           try {
-            const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
-            if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+              params: { accountId: accountData.id },
+              headers: {
+                "X-API-KEY": apiKey,
+                Accept: "application/json",
+              },
+            });
+            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+            if (transactionsData.length > 0) {
               // Upsert each transaction
-              for (const transaction of transactionsResponse.results) {
+              for (const transaction of transactionsData) {
                 const transactionData = transaction as any;
                 // Handle date - convert Date objects to ISO string format (YYYY-MM-DD)
                 const transactionDate = transactionData.date 
@@ -368,28 +428,15 @@ async function syncItemData(itemId: string): Promise<void> {
 
                 await transactionsService.upsertTransaction(transactionRecord);
               }
-              console.log(`Synced ${transactionsResponse.results.length} transactions for account ${accountData.id}`);
+              console.log(`Synced ${transactionsData.length} transactions for account ${accountData.id}`);
             }
           } catch (transactionError) {
             console.error(`Error syncing transactions for account ${accountData.id}:`, transactionError);
           }
 
-          // Sync bills for credit accounts
-          // Note: SDK doesn't have bills endpoint, so we need to use axios with API key
+          // Sync bills for credit accounts (same pattern as api/bills.ts)
           if (accountData.type === "CREDIT") {
             try {
-              // Get API key for bills endpoint (not available in SDK)
-              let apiKey: string;
-              try {
-                const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-                  clientId: PLUGGY_CLIENT_ID,
-                  clientSecret: PLUGGY_CLIENT_SECRET,
-                });
-                apiKey = authResponse.data.apiKey;
-              } catch (authError) {
-                console.error("Error getting Pluggy API key for bills:", authError);
-                continue; // Skip bills if auth fails
-              }
 
               const billsResponse = await axios.get("https://api.pluggy.ai/bills", {
                 params: { accountId: accountData.id },
@@ -430,9 +477,16 @@ async function syncItemData(itemId: string): Promise<void> {
       console.error(`Error syncing accounts for item ${itemId}:`, accountError);
     }
 
-    // Fetch and sync identity
+    // Fetch and sync identity (same pattern as api/identity.ts)
     try {
-      const identity = await pluggyClient.fetchIdentityByItemId(itemId);
+      const identityResponse = await axios.get("https://api.pluggy.ai/identity", {
+        params: { itemId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      const identity = identityResponse.data;
       if (identity) {
         const identityRecord: IdentityRecord = {
           item_id: itemId,
@@ -455,17 +509,24 @@ async function syncItemData(itemId: string): Promise<void> {
       }
     } catch (identityError: any) {
       // Identity might not exist for all items, which is OK
-      if (identityError.response?.status !== 404 && identityError.code !== 404) {
+      if (identityError.response?.status !== 404) {
         console.error(`Error syncing identity for item ${itemId}:`, identityError);
       }
     }
 
-    // Fetch and sync investments
+    // Fetch and sync investments (same pattern as api/investments.ts)
     try {
-      const investmentsResponse = await pluggyClient.fetchInvestments(itemId);
-      if (investmentsResponse.results && investmentsResponse.results.length > 0) {
+      const investmentsResponse = await axios.get("https://api.pluggy.ai/investments", {
+        params: { itemId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      const investmentsData = investmentsResponse.data?.results || investmentsResponse.data || [];
+      if (investmentsData.length > 0) {
         // Upsert each investment
-        for (const investment of investmentsResponse.results) {
+        for (const investment of investmentsData) {
           const investmentData = investment as any;
           const investmentRecord: InvestmentRecord = {
             item_id: itemId,
@@ -505,30 +566,16 @@ async function syncItemData(itemId: string): Promise<void> {
 
           await investmentsService.upsertInvestiment(investmentRecord);
         }
-        console.log(`Synced ${investmentsResponse.results.length} investments for item ${itemId}`);
+        console.log(`Synced ${investmentsData.length} investments for item ${itemId}`);
       }
     } catch (investmentError: any) {
-      if (investmentError.response?.status !== 404 && investmentError.code !== 404) {
+      if (investmentError.response?.status !== 404) {
         console.error(`Error syncing investments for item ${itemId}:`, investmentError);
       }
     }
 
-    // Fetch and sync loans
-    // Note: SDK doesn't have loans endpoint, so we need to use axios with API key
+    // Fetch and sync loans (same pattern as api/loans.ts)
     try {
-      // Get API key for loans endpoint (not available in SDK)
-      let apiKey: string;
-      try {
-        const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-          clientId: PLUGGY_CLIENT_ID,
-          clientSecret: PLUGGY_CLIENT_SECRET,
-        });
-        apiKey = authResponse.data.apiKey;
-      } catch (authError) {
-        console.error("Error getting Pluggy API key for loans:", authError);
-        return; // Skip loans if auth fails
-      }
-
       const loansResponse = await axios.get("https://api.pluggy.ai/loans", {
         params: { itemId },
         headers: {
@@ -617,15 +664,28 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
     }
 
     try {
-      // Use SDK client (handles authentication automatically)
-      const pluggyClient = getPluggyClient();
+      // Get API key first (same pattern as working endpoints)
+      let apiKey: string;
+      try {
+        apiKey = await getPluggyApiKey();
+      } catch (authError) {
+        console.error("Error authenticating with Pluggy API:", authError);
+        return; // Return early if authentication fails
+      }
       
       // If accountId is provided, fetch all transactions for that account
       if (accountId) {
-        const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
-        if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+          params: { accountId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+        if (transactionsData.length > 0) {
           // Upsert all transactions (new ones will be created, existing ones updated)
-          for (const transaction of transactionsResponse.results) {
+          for (const transaction of transactionsData) {
             const transactionData = transaction as any;
             const transactionDate = transactionData.date 
               ? (typeof transactionData.date === 'string' 
@@ -658,19 +718,33 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
 
             await transactionsService.upsertTransaction(transactionRecord);
           }
-          console.log(`Upserted ${transactionsResponse.results.length} transactions for account ${accountId}`);
+          console.log(`Upserted ${transactionsData.length} transactions for account ${accountId}`);
         }
       } else {
         // If no accountId, fetch all accounts for the item and sync all transactions
         console.log("No accountId provided, fetching all accounts for item");
-        const accountsResponse = await pluggyClient.fetchAccounts(itemId);
-        if (accountsResponse.results && accountsResponse.results.length > 0) {
-          for (const account of accountsResponse.results) {
+        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+          params: { itemId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+        if (accountsData.length > 0) {
+          for (const account of accountsData) {
             const accountData = account as any;
             try {
-              const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
-              if (transactionsResponse.results && transactionsResponse.results.length > 0) {
-                for (const transaction of transactionsResponse.results) {
+              const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+                params: { accountId: accountData.id },
+                headers: {
+                  "X-API-KEY": apiKey,
+                  Accept: "application/json",
+                },
+              });
+              const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+              if (transactionsData.length > 0) {
+                for (const transaction of transactionsData) {
                   const transactionData = transaction as any;
                   const transactionDate = transactionData.date 
                     ? (typeof transactionData.date === 'string' 
@@ -725,15 +799,28 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
   }
 
   try {
-    // Use SDK client (handles authentication automatically)
-    const pluggyClient = getPluggyClient();
+    // Get API key first (same pattern as working endpoints)
+    let apiKey: string;
+    try {
+      apiKey = await getPluggyApiKey();
+    } catch (authError) {
+      console.error("Error authenticating with Pluggy API:", authError);
+      throw new Error("Failed to authenticate with Pluggy API");
+    }
 
     // If accountId is provided, fetch transactions for that account
     if (accountId) {
-      const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
-      if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+        params: { accountId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+      if (transactionsData.length > 0) {
         // Filter to only the created transactions and upsert them
-        const createdTransactions = transactionsResponse.results.filter((t: any) =>
+        const createdTransactions = transactionsData.filter((t: any) =>
           transactionIds.includes(t.id)
         );
 
@@ -776,15 +863,29 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
     } else {
       // If accountId is not provided, fetch all accounts for the item and search for transactions
       console.log("accountId not provided, fetching all accounts for item");
-      const accountsResponse = await pluggyClient.fetchAccounts(itemId);
+      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+        params: { itemId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
 
-      if (accountsResponse.results && accountsResponse.results.length > 0) {
-        for (const account of accountsResponse.results) {
+      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+      if (accountsData.length > 0) {
+        for (const account of accountsData) {
           const accountData = account as any;
           try {
-            const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
-            if (transactionsResponse.results && transactionsResponse.results.length > 0) {
-              const createdTransactions = transactionsResponse.results.filter((t: any) =>
+            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+              params: { accountId: accountData.id },
+              headers: {
+                "X-API-KEY": apiKey,
+                Accept: "application/json",
+              },
+            });
+            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+            if (transactionsData.length > 0) {
+              const createdTransactions = transactionsData.filter((t: any) =>
                 transactionIds.includes(t.id)
               );
 
@@ -854,15 +955,28 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
     }
 
     try {
-      // Use SDK client (handles authentication automatically)
-      const pluggyClient = getPluggyClient();
+      // Get API key first (same pattern as working endpoints)
+      let apiKey: string;
+      try {
+        apiKey = await getPluggyApiKey();
+      } catch (authError) {
+        console.error("Error authenticating with Pluggy API:", authError);
+        return; // Return early if authentication fails
+      }
       
       // If accountId is provided, fetch all transactions for that account
       if (accountId) {
-        const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
-        if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+          params: { accountId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+        if (transactionsData.length > 0) {
           // Upsert all transactions (existing ones will be updated)
-          for (const transaction of transactionsResponse.results) {
+          for (const transaction of transactionsData) {
             const transactionData = transaction as any;
             const transactionDate = transactionData.date 
               ? (typeof transactionData.date === 'string' 
@@ -895,19 +1009,33 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
 
             await transactionsService.upsertTransaction(transactionRecord);
           }
-          console.log(`Upserted ${transactionsResponse.results.length} updated transactions for account ${accountId}`);
+          console.log(`Upserted ${transactionsData.length} updated transactions for account ${accountId}`);
         }
       } else {
         // If no accountId, fetch all accounts for the item and sync all transactions
         console.log("No accountId provided, fetching all accounts for item");
-        const accountsResponse = await pluggyClient.fetchAccounts(itemId);
-        if (accountsResponse.results && accountsResponse.results.length > 0) {
-          for (const account of accountsResponse.results) {
+        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+          params: { itemId },
+          headers: {
+            "X-API-KEY": apiKey,
+            Accept: "application/json",
+          },
+        });
+        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+        if (accountsData.length > 0) {
+          for (const account of accountsData) {
             const accountData = account as any;
             try {
-              const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
-              if (transactionsResponse.results && transactionsResponse.results.length > 0) {
-                for (const transaction of transactionsResponse.results) {
+              const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+                params: { accountId: accountData.id },
+                headers: {
+                  "X-API-KEY": apiKey,
+                  Accept: "application/json",
+                },
+              });
+              const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+              if (transactionsData.length > 0) {
+                for (const transaction of transactionsData) {
                   const transactionData = transaction as any;
                   const transactionDate = transactionData.date 
                     ? (typeof transactionData.date === 'string' 
@@ -962,15 +1090,28 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
   }
 
   try {
-    // Use SDK client (handles authentication automatically)
-    const pluggyClient = getPluggyClient();
+    // Get API key first (same pattern as working endpoints)
+    let apiKey: string;
+    try {
+      apiKey = await getPluggyApiKey();
+    } catch (authError) {
+      console.error("Error authenticating with Pluggy API:", authError);
+      throw new Error("Failed to authenticate with Pluggy API");
+    }
 
     // If accountId is provided, fetch transactions for that account
     if (accountId) {
-      const transactionsResponse = await pluggyClient.fetchTransactions(accountId);
-      if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+        params: { accountId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
+      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+      if (transactionsData.length > 0) {
         // Filter to only the updated transactions and upsert them
-        const updatedTransactions = transactionsResponse.results.filter((t: any) =>
+        const updatedTransactions = transactionsData.filter((t: any) =>
           transactionIds.includes(t.id)
         );
 
@@ -1013,15 +1154,29 @@ async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): P
     } else {
       // If accountId is not provided, fetch all accounts for the item and search for transactions
       console.log("accountId not provided, fetching all accounts for item");
-      const accountsResponse = await pluggyClient.fetchAccounts(itemId);
+      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
+        params: { itemId },
+        headers: {
+          "X-API-KEY": apiKey,
+          Accept: "application/json",
+        },
+      });
 
-      if (accountsResponse.results && accountsResponse.results.length > 0) {
-        for (const account of accountsResponse.results) {
+      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
+      if (accountsData.length > 0) {
+        for (const account of accountsData) {
           const accountData = account as any;
           try {
-            const transactionsResponse = await pluggyClient.fetchTransactions(accountData.id);
-            if (transactionsResponse.results && transactionsResponse.results.length > 0) {
-              const updatedTransactions = transactionsResponse.results.filter((t: any) =>
+            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
+              params: { accountId: accountData.id },
+              headers: {
+                "X-API-KEY": apiKey,
+                Accept: "application/json",
+              },
+            });
+            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
+            if (transactionsData.length > 0) {
+              const updatedTransactions = transactionsData.filter((t: any) =>
                 transactionIds.includes(t.id)
               );
 
