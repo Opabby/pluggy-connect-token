@@ -2,7 +2,7 @@ import { LoanRecord } from "../types";
 import { supabase } from "../supabase";
 
 export const loansService = {
-  async upsertLoans(loanData: LoanRecord): Promise<LoanRecord> {
+  async upsertLoan(loanData: LoanRecord): Promise<LoanRecord> {
     const { data, error } = await supabase
       .from("loans")
       .upsert(loanData, {
@@ -20,30 +20,18 @@ export const loansService = {
     return data;
   },
 
-  async createLoan(loanData: LoanRecord): Promise<LoanRecord> {
+  async upsertMultipleLoans(loans: LoanRecord[]): Promise<LoanRecord[]> {
     const { data, error } = await supabase
       .from("loans")
-      .insert([loanData])
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error creating loan:", error);
-      throw new Error(`Failed to create loan: ${error.message}`);
-    }
-
-    return data;
-  },
-
-  async createMultipleLoans(loans: LoanRecord[]): Promise<LoanRecord[]> {
-    const { data, error } = await supabase
-      .from("loans")
-      .insert(loans)
+      .upsert(loans, {
+        onConflict: "loan_id",
+        ignoreDuplicates: false,
+      })
       .select();
 
     if (error) {
-      console.error("Error creating loans:", error);
-      throw new Error(`Failed to create loans: ${error.message}`);
+      console.error("Error upserting loans:", error);
+      throw new Error(`Failed to upsert loans: ${error.message}`);
     }
 
     return data || [];
@@ -62,24 +50,5 @@ export const loansService = {
     }
 
     return data || [];
-  },
-
-  async updateLoan(
-    loanId: string,
-    updateData: Partial<LoanRecord>
-  ): Promise<LoanRecord> {
-    const { data, error } = await supabase
-      .from("loans")
-      .update(updateData)
-      .eq("loan_id", loanId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error updating loan:", error);
-      throw new Error(`Failed to update loan: ${error.message}`);
-    }
-
-    return data;
-  },
+  }
 };

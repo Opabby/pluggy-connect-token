@@ -2,11 +2,13 @@
   "name": "vercel-node-connect-token",
   "description": "A vercel serverless function example that creates a connect token to pair new accounts",
   "devDependencies": {
-    "@vercel/node": "^1.8.5"
+    "@types/node": "^24.10.1",
+    "@vercel/node": "^1.8.5",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.79.0",
     "axios": "^1.13.2",
-    "pluggy-sdk": "^0.7.0"
+    "pluggy-sdk": "^0.79.0"
   }
 }

@@ -180,7 +180,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   try {
     const savedInvestments =
-      await investmentsService.createMultipleInvestments(investments);
+      await investmentsService.upsertMultipleInvestments(investments);
     return res.status(201).json(savedInvestments);
   } catch (error) {
     console.error("Error saving investments:", error);

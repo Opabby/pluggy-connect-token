@@ -118,7 +118,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const savedBills = await creditCardBillsService.createMultipleBills(bills);
+    const savedBills = await creditCardBillsService.upsertMultipleBills(bills);
     return res.status(201).json(savedBills);
   } catch (error) {
     console.error("Error saving bills:", error);

@@ -21,8 +21,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await handleGet(req, res);
       case "POST":
         return await handlePost(req, res);
-      case "DELETE":
-        return await handleDelete(req, res);
       default:
         return res.status(405).json({ error: "Method not allowed" });
     }
@@ -102,37 +100,12 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const savedIdentity = await identityService.createIdentity(identityData);
+    const savedIdentity = await identityService.upsertIdentity(identityData);
     return res.status(201).json(savedIdentity);
   } catch (error) {
     console.error("Error saving identity:", error);
     return res.status(500).json({
       error: "Failed to save identity",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-}
-
-async function handleDelete(req: VercelRequest, res: VercelResponse) {
-  const { identityId } = req.query;
-
-  if (!identityId || typeof identityId !== "string") {
-    return res.status(400).json({ error: "identityId is required" });
-  }
-
-  try {
-    await identityService.deleteIdentity(identityId);
-    console.log(`Identity ${identityId} deleted from database`);
-
-    return res.status(200).json({
-      success: true,
-      message: "Identity deleted successfully",
-      identityId,
-    });
-  } catch (error) {
-    console.error("Error deleting identity:", error);
-    return res.status(500).json({
-      error: "Failed to delete identity",
       details: error instanceof Error ? error.message : "Unknown error",
     });
   }

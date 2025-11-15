@@ -5,7 +5,6 @@ import { creditCardBillsService } from "./services/credit-card-bills";
 import { investmentsService } from "./services/investments";
 import { loansService } from "./services/loans";
 import { identityService } from "./services/identity";
-import { utilityService } from "./services/utils";
 
 export default {
   items: itemsService,
@@ -15,5 +14,4 @@ export default {
   investments: investmentsService,
   loans: loansService,
   identity: identityService,
-  utility: utilityService
 };

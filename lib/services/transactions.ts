@@ -22,34 +22,20 @@ export const transactionsService = {
     return data;
   },
 
-  async createTransaction(
-    transactionData: TransactionRecord
-  ): Promise<TransactionRecord> {
-    const { data, error } = await supabase
-      .from("transactions")
-      .insert([transactionData])
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error creating transaction:", error);
-      throw new Error(`Failed to create transaction: ${error.message}`);
-    }
-
-    return data;
-  },
-
-  async createMultipleTransactions(
+  async upsertMultipleTransactions(
     transactions: TransactionRecord[]
   ): Promise<TransactionRecord[]> {
     const { data, error } = await supabase
       .from("transactions")
-      .insert(transactions)
+      .upsert(transactions, {
+        onConflict: "transaction_id",
+        ignoreDuplicates: false,
+      })
       .select();
 
     if (error) {
-      console.error("Error creating transactions:", error);
-      throw new Error(`Failed to create transactions: ${error.message}`);
+      console.error("Error upserting transactions:", error);
+      throw new Error(`Failed to upsert transactions: ${error.message}`);
     }
 
     return data || [];
@@ -73,37 +59,6 @@ export const transactionsService = {
     }
 
     return data || [];
-  },
-
-  async updateTransaction(
-    transactionId: string,
-    updateData: Partial<TransactionRecord>
-  ): Promise<TransactionRecord> {
-    const { data, error } = await supabase
-      .from("transactions")
-      .update(updateData)
-      .eq("transaction_id", transactionId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error updating transaction:", error);
-      throw new Error(`Failed to update transaction: ${error.message}`);
-    }
-
-    return data;
-  },
-
-  async deleteTransaction(transactionId: string): Promise<void> {
-    const { error } = await supabase
-      .from("transactions")
-      .delete()
-      .eq("transaction_id", transactionId);
-
-    if (error) {
-      console.error("Error deleting transaction:", error);
-      throw new Error(`Failed to delete transaction: ${error.message}`);
-    }
   },
 
   async deleteMultipleTransactions(transactionIds: string[]): Promise<void> {

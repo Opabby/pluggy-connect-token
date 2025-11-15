@@ -19,8 +19,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await handleGet(req, res);
       case "POST":
         return await handlePost(req, res);
-      case "DELETE":
-        return await handleDelete(req, res);
       default:
         return res.status(405).json({ error: "Method not allowed" });
     }
@@ -111,23 +109,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   const savedTransactions =
-    await transactionsService.createMultipleTransactions(transactions);
+    await transactionsService.upsertMultipleTransactions(transactions);
 
   return res.status(201).json(savedTransactions);
-}
-
-async function handleDelete(req: VercelRequest, res: VercelResponse) {
-  const { transactionId } = req.query;
-
-  if (!transactionId || typeof transactionId !== "string") {
-    return res.status(400).json({ error: "transactionId is required" });
-  }
-
-  await transactionsService.deleteTransaction(transactionId);
-
-  return res.status(200).json({
-    success: true,
-    message: "Transaction deleted successfully",
-    transactionId,
-  });
 }
