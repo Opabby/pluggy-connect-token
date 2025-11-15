@@ -79,7 +79,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "item_id is required" });
   }
 
-  const savedItem = await itemsService.createItem(itemData);
+  const savedItem = await itemsService.upsertItem(itemData);
   console.log("Item saved to Supabase:", savedItem);
 
   const responseData: {
@@ -140,13 +140,12 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
         })
       );
 
-      const savedAccounts = await accountsService.createMultipleAccounts(
+      const savedAccounts = await accountsService.upsertMultipleAccounts(
         accountsToSave
       );
       console.log("Accounts saved to Supabase:", savedAccounts);
       responseData.accounts = savedAccounts;
 
-      // Fetch and save transactions for each account
       if (savedAccounts && savedAccounts.length > 0) {
         const allTransactions: TransactionRecord[] = [];
         
@@ -205,11 +204,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        // Save all transactions in batch
         if (allTransactions.length > 0) {
           try {
             const savedTransactions =
-              await transactionsService.createMultipleTransactions(allTransactions);
+              await transactionsService.upsertMultipleTransactions(allTransactions);
             console.log(
               `Saved ${savedTransactions.length} transactions to Supabase`
             );
@@ -223,7 +221,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        // Fetch and save credit card bills for each account
         const allBills: CreditCardBillRecord[] = [];
 
         for (const account of savedAccounts) {
@@ -237,7 +234,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
               },
             });
 
-            // Handle both response formats: { results: [...] } or direct array
             const billsData = billsResponse.data?.results || billsResponse.data;
             const billsArray = Array.isArray(billsData) ? billsData : [];
 
@@ -277,11 +273,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        // Save all bills in batch
         if (allBills.length > 0) {
           try {
             const savedBills =
-              await creditCardBillsService.createMultipleBills(allBills);
+              await creditCardBillsService.upsertMultipleBills(allBills);
             console.log(`Saved ${savedBills.length} bills to Supabase`);
           } catch (saveError) {
             console.error("Error saving bills to Supabase:", saveError);
@@ -305,7 +300,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     );
   }
 
-  // Fetch and save identity
   if (apiKey) {
     try {
       console.log("Fetching identity for item:", itemData.item_id);
@@ -342,7 +336,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           relations: identity.relations,
         };
 
-        const savedIdentity = await identityService.createIdentity(
+        const savedIdentity = await identityService.upsertIdentity(
           identityToSave
         );
         console.log("Identity saved to Supabase:", savedIdentity);
@@ -431,7 +425,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           }));
 
         const savedInvestments =
-          await investmentsService.createMultipleInvestments(investmentsToSave);
+          await investmentsService.upsertMultipleInvestments(investmentsToSave);
         console.log("Investments saved to Supabase:", savedInvestments);
         responseData.investments = savedInvestments;
 
@@ -504,11 +498,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
             }
           }
 
-          // Save all investment transactions in batch
           if (allInvestmentTransactions.length > 0) {
             try {
               const savedInvestmentTransactions =
-                await investmentsService.createMultipleInvestmentTransactions(
+                await investmentsService.upsertMultipleInvestmentTransactions(
                   allInvestmentTransactions
                 );
               console.log(
@@ -557,7 +550,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // Fetch and save loans
   if (apiKey) {
     try {
       console.log("Fetching loans for item:", itemData.item_id);
@@ -569,9 +561,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
         },
       });
 
-      console.log("Loans fetched from Pluggy:", loansResponse.data);
-
-      // Handle both response formats: { results: [...] } or direct array
       const loansData = loansResponse.data?.results || loansResponse.data;
       const loansArray = Array.isArray(loansData) ? loansData : [];
 
@@ -610,7 +599,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           })
         );
 
-        const savedLoans = await loansService.createMultipleLoans(loansToSave);
+        const savedLoans = await loansService.upsertMultipleLoans(loansToSave);
         console.log("Loans saved to Supabase:", savedLoans);
         responseData.loans = savedLoans;
       } else {
@@ -655,7 +644,6 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
 
   const warnings: string[] = [];
 
-  // Attempt to delete from Pluggy (non-blocking)
   if (hasPluggyCredentials()) {
     try {
       const pluggyClient = getPluggyClient();
@@ -679,7 +667,6 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // Delete item from database (CASCADE DELETE will handle related records)
   try {
     await itemsService.deleteItem(itemId);
     console.log(`Item ${itemId} deleted from database (cascade delete handled related records)`);

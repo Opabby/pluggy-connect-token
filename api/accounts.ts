@@ -19,8 +19,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await handleGet(req, res);
       case "POST":
         return await handlePost(req, res);
-      case "DELETE":
-        return await handleDelete(req, res);
       default:
         return res.status(405).json({ error: "Method not allowed" });
     }
@@ -76,31 +74,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  const savedAccounts = await accountsService.createMultipleAccounts(accounts);
+  const savedAccounts = await accountsService.upsertMultipleAccounts(accounts);
   return res.status(201).json(savedAccounts);
-}
-
-async function handleDelete(req: VercelRequest, res: VercelResponse) {
-  const { accountId } = req.query;
-
-  if (!accountId || typeof accountId !== "string") {
-    return res.status(400).json({ error: "accountId is required" });
-  }
-
-  try {
-    await accountsService.deleteAccount(accountId);
-    console.log(`Account ${accountId} deleted from database`);
-
-    return res.status(200).json({
-      success: true,
-      message: "Account deleted successfully",
-      accountId,
-    });
-  } catch (error) {
-    console.error("Error deleting account:", error);
-    return res.status(500).json({
-      error: "Failed to delete account",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
 }

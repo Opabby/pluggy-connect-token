@@ -118,7 +118,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const savedLoans = await loansService.createMultipleLoans(loans);
+    const savedLoans = await loansService.upsertMultipleLoans(loans);
     return res.status(201).json(savedLoans);
   } catch (error) {
     console.error("Error saving loans:", error);

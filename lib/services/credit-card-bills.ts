@@ -22,34 +22,20 @@ export const creditCardBillsService = {
     return data;
   },
 
-  async createBill(
-    billData: CreditCardBillRecord
-  ): Promise<CreditCardBillRecord> {
-    const { data, error } = await supabase
-      .from("credit_card_bills")
-      .insert([billData])
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error creating credit card bill:", error);
-      throw new Error(`Failed to create credit card bill: ${error.message}`);
-    }
-
-    return data;
-  },
-
-  async createMultipleBills(
+  async upsertMultipleBills(
     bills: CreditCardBillRecord[]
   ): Promise<CreditCardBillRecord[]> {
     const { data, error } = await supabase
       .from("credit_card_bills")
-      .insert(bills)
+      .upsert(bills, {
+        onConflict: "bill_id",
+        ignoreDuplicates: false,
+      })
       .select();
 
     if (error) {
-      console.error("Error creating credit card bills:", error);
-      throw new Error(`Failed to create credit card bills: ${error.message}`);
+      console.error("Error upserting credit card bills:", error);
+      throw new Error(`Failed to upsert credit card bills: ${error.message}`);
     }
 
     return data || [];
@@ -70,24 +56,5 @@ export const creditCardBillsService = {
     }
 
     return data || [];
-  },
-
-  async updateBill(
-    billId: string,
-    updateData: Partial<CreditCardBillRecord>
-  ): Promise<CreditCardBillRecord> {
-    const { data, error } = await supabase
-      .from("credit_card_bills")
-      .update(updateData)
-      .eq("bill_id", billId)
-      .select()
-      .single();
-
-    if (error) {
-      console.error("Error updating credit card bill:", error);
-      throw new Error(`Failed to update credit card bill: ${error.message}`);
-    }
-
-    return data;
-  },
+  }
 };
