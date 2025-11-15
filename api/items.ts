@@ -17,9 +17,6 @@ import type {
   LoanRecord,
   CreditCardBillRecord,
 } from "../lib/types";
-import axios from "axios";
-
-const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
@@ -44,9 +41,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   } catch (error) {
     console.error("Error in items handler:", error);
+    
+    if (error instanceof Error) {
+      if ('response' in error && typeof error.response === 'object') {
+        const response = error.response as { status?: number };
+        
+        switch (response.status) {
+          case 401:
+            return res.status(401).json({ 
+              error: "Authentication failed. Please check Pluggy credentials." 
+            });
+          case 404:
+            return res.status(404).json({ 
+              error: "Resource not found" 
+            });
+          case 429:
+            return res.status(429).json({ 
+              error: "Rate limit exceeded. Please try again later." 
+            });
+          default:
+            break;
+        }
+      }
+      
+      return res.status(500).json({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+    
     return res.status(500).json({
       error: "Internal server error",
-      details: error instanceof Error ? error.message : "Unknown error",
+      details: "Unknown error",
     });
   }
 }
@@ -54,33 +80,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 async function handleGet(req: VercelRequest, res: VercelResponse) {
   const { itemId, userId } = req.query;
 
+  // Fetch specific item from Pluggy
   if (itemId && typeof itemId === "string") {
     if (!hasPluggyCredentials()) {
-      return res.status(500).json({
-        error: "Missing Pluggy credentials in environment variables",
+      return res.status(503).json({
+        error: "Pluggy integration not configured",
+        details: "Missing required credentials"
       });
     }
 
-    const pluggyClient = getPluggyClient();
-    const item = await pluggyClient.fetchItem(itemId);
-    return res.json(item);
+    try {
+      const pluggyClient = getPluggyClient();
+      const item = await pluggyClient.fetchItem(itemId);
+      return res.json({
+        success: true,
+        data: item
+      });
+    } catch (error) {
+      console.error("Error fetching item from Pluggy:", error);
+      throw error;
+    }
   }
 
-  const userIdFilter =
-    userId && typeof userId === "string" ? userId : undefined;
-  const items = await itemsService.getUserItems(userIdFilter);
-  return res.json(items);
+  try {
+    const userIdFilter = userId && typeof userId === "string" ? userId : undefined;
+    const items = await itemsService.getUserItems(userIdFilter);
+    return res.json({
+      success: true,
+      data: items
+    });
+  } catch (error) {
+    console.error("Error fetching items from database:", error);
+    throw error;
+  }
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   const itemData: PluggyItemRecord = req.body;
 
   if (!itemData.item_id) {
-    return res.status(400).json({ error: "item_id is required" });
+    return res.status(400).json({ 
+      error: "Bad request",
+      details: "item_id is required" 
+    });
   }
 
   const savedItem = await itemsService.upsertItem(itemData);
-  console.log("Item saved to Supabase:", savedItem);
 
   const responseData: {
     item: PluggyItemRecord;
@@ -104,21 +149,8 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   const pluggyClient = getPluggyClient();
 
-  let apiKey: string | null = null;
-  try {
-    const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-      clientId: PLUGGY_CLIENT_ID,
-      clientSecret: PLUGGY_CLIENT_SECRET,
-    });
-    apiKey = authResponse.data.apiKey;
-  } catch (authError) {
-    console.error("Error getting Pluggy API key:", authError);
-    responseData.warnings?.push("Failed to authenticate with Pluggy API");
-  }
-
   try {
     const accountsResponse = await pluggyClient.fetchAccounts(itemData.item_id);
-    console.log("Accounts fetched from Pluggy:", accountsResponse);
 
     if (accountsResponse.results && accountsResponse.results.length > 0) {
       const accountsToSave: AccountRecord[] = accountsResponse.results.map(
@@ -140,10 +172,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
         })
       );
 
-      const savedAccounts = await accountsService.upsertMultipleAccounts(
-        accountsToSave
-      );
-      console.log("Accounts saved to Supabase:", savedAccounts);
+      const savedAccounts = await accountsService.upsertMultipleAccounts(accountsToSave);
       responseData.accounts = savedAccounts;
 
       if (savedAccounts && savedAccounts.length > 0) {
@@ -151,7 +180,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
         
         for (const account of savedAccounts) {
           try {
-            console.log(`Fetching transactions for account: ${account.account_id}`);
+
             const transactionsResponse = await pluggyClient.fetchTransactions(
               account.account_id
             );
@@ -183,11 +212,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
               );
 
               allTransactions.push(...transactionsToSave);
-              console.log(
-                `Found ${transactionsToSave.length} transactions for account ${account.account_id}`
-              );
-            } else {
-              console.log(`No transactions found for account ${account.account_id}`);
             }
           } catch (transactionError) {
             console.error(
@@ -208,9 +232,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           try {
             const savedTransactions =
               await transactionsService.upsertMultipleTransactions(allTransactions);
-            console.log(
-              `Saved ${savedTransactions.length} transactions to Supabase`
-            );
           } catch (saveError) {
             console.error("Error saving transactions to Supabase:", saveError);
             responseData.warnings?.push(
@@ -225,17 +246,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
         for (const account of savedAccounts) {
           try {
-            console.log(`Fetching bills for account: ${account.account_id}`);
-            const billsResponse = await axios.get("https://api.pluggy.ai/bills", {
-              params: { accountId: account.account_id },
-              headers: {
-                "X-API-KEY": apiKey,
-                Accept: "application/json",
-              },
-            });
 
-            const billsData = billsResponse.data?.results || billsResponse.data;
-            const billsArray = Array.isArray(billsData) ? billsData : [];
+            const billsResponse = await pluggyClient.fetchCreditCardBills(account.account_id);
+
+            const billsArray = billsResponse.results || [];
 
             if (billsArray.length > 0) {
               const billsToSave: CreditCardBillRecord[] = billsArray.map(
@@ -252,11 +266,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
               );
 
               allBills.push(...billsToSave);
-              console.log(
-                `Found ${billsToSave.length} bills for account ${account.account_id}`
-              );
-            } else {
-              console.log(`No bills found for account ${account.account_id}`);
             }
           } catch (billError) {
             console.error(
@@ -277,7 +286,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
           try {
             const savedBills =
               await creditCardBillsService.upsertMultipleBills(allBills);
-            console.log(`Saved ${savedBills.length} bills to Supabase`);
           } catch (saveError) {
             console.error("Error saving bills to Supabase:", saveError);
             responseData.warnings?.push(
@@ -289,7 +297,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
         }
       }
     } else {
-      console.log("No accounts found for this item");
       responseData.accounts = [];
     }
   } catch (accountError) {
@@ -300,335 +307,241 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     );
   }
 
-  if (apiKey) {
-    try {
-      console.log("Fetching identity for item:", itemData.item_id);
-      const identityResponse = await axios.get(
-        "https://api.pluggy.ai/identity",
-        {
-          params: { itemId: itemData.item_id },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        }
-      );
+  try {
+    
+    const identity = await pluggyClient.fetchIdentityByItemId(itemData.item_id);
 
-      console.log("Identity fetched from Pluggy:", identityResponse.data);
+    if (identity) {
+      const identityToSave: IdentityRecord = {
+        item_id: itemData.item_id,
+        identity_id: identity.id,
+        full_name: identity.fullName,
+        company_name: identity.companyName,
+        document: identity.document,
+        document_type: identity.documentType,
+        tax_number: identity.taxNumber,
+        job_title: identity.jobTitle,
+        birth_date: identity.birthDate
+          ? new Date(identity.birthDate).toISOString()
+          : undefined,
+        addresses: identity.addresses,
+        phone_numbers: identity.phoneNumbers,
+        emails: identity.emails,
+        relations: identity.relations,
+      };
 
-      if (identityResponse.data) {
-        const identity = identityResponse.data;
-        const identityToSave: IdentityRecord = {
-          item_id: itemData.item_id,
-          identity_id: identity.id,
-          full_name: identity.fullName,
-          company_name: identity.companyName,
-          document: identity.document,
-          document_type: identity.documentType,
-          tax_number: identity.taxNumber,
-          job_title: identity.jobTitle,
-          birth_date: identity.birthDate
-            ? new Date(identity.birthDate).toISOString()
-            : undefined,
-          addresses: identity.addresses,
-          phone_numbers: identity.phoneNumbers,
-          emails: identity.emails,
-          relations: identity.relations,
-        };
-
-        const savedIdentity = await identityService.upsertIdentity(
-          identityToSave
-        );
-        console.log("Identity saved to Supabase:", savedIdentity);
-        responseData.identity = savedIdentity;
-      }
-    } catch (identityError) {
-      if (
-        identityError &&
-        typeof identityError === "object" &&
-        "response" in identityError
-      ) {
-        const axiosError = identityError as any;
-        if (axiosError.response?.status === 404) {
-          console.log("No identity available for this item (404)");
-        } else {
-          console.error("Error fetching/saving identity:", identityError);
-          responseData.warnings?.push(
-            "Failed to fetch/save identity: " +
-              (axiosError.response?.data?.message ||
-                axiosError.message ||
-                "Unknown error")
-          );
-        }
+      const savedIdentity = await identityService.upsertIdentity(identityToSave);
+      responseData.identity = savedIdentity;
+    }
+  } catch (identityError) {
+    if (identityError instanceof Error && 'response' in identityError) {
+      const response = identityError.response as { status?: number };
+      if (response.status === 404) {
       } else {
         console.error("Error fetching/saving identity:", identityError);
-        responseData.warnings?.push("Failed to fetch/save identity");
+        responseData.warnings?.push(
+          "Failed to fetch/save identity: " + identityError.message
+        );
       }
+    } else {
+      console.error("Error fetching/saving identity:", identityError);
+      responseData.warnings?.push("Failed to fetch/save identity");
     }
   }
 
-  if (apiKey) {
-    try {
-      console.log("Fetching investments for item:", itemData.item_id);
-      const investmentsResponse = await axios.get(
-        "https://api.pluggy.ai/investments",
-        {
-          params: { itemId: itemData.item_id },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        }
-      );
+  try {
 
-      console.log("Investments fetched from Pluggy:", investmentsResponse.data);
+    const investmentsResponse = await pluggyClient.fetchInvestments(itemData.item_id);
 
-      if (
-        investmentsResponse.data?.results &&
-        investmentsResponse.data.results.length > 0
-      ) {
-        const investmentsToSave: InvestmentRecord[] =
-          investmentsResponse.data.results.map((investment: any) => ({
-            item_id: itemData.item_id,
-            investment_id: investment.id,
-            name: investment.name,
-            code: investment.code,
-            isin: investment.isin,
-            number: investment.number,
-            owner: investment.owner,
-            currency_code: investment.currencyCode,
-            type: investment.type,
-            subtype: investment.subtype,
-            last_month_rate: investment.lastMonthRate,
-            last_twelve_months_rate: investment.lastTwelveMonthsRate,
-            annual_rate: investment.annualRate,
-            date: investment.date,
-            value: investment.value,
-            quantity: investment.quantity,
-            amount: investment.amount,
-            balance: investment.balance,
-            taxes: investment.taxes,
-            taxes2: investment.taxes2,
-            due_date: investment.dueDate,
-            rate: investment.rate,
-            rate_type: investment.rateType,
-            fixed_annual_rate: investment.fixedAnnualRate,
-            issuer: investment.issuer,
-            issue_date: investment.issueDate,
-            amount_profit: investment.amountProfit,
-            amount_withdrawal: investment.amountWithdrawal,
-            amount_original: investment.amountOriginal,
-            status: investment.status,
-            institution: investment.institution,
-            metadata: investment.metadata,
-            provider_id: investment.providerId,
-          }));
+    if (investmentsResponse.results && investmentsResponse.results.length > 0) {
+      const investmentsToSave: InvestmentRecord[] =
+        investmentsResponse.results.map((investment: any) => ({
+          item_id: itemData.item_id,
+          investment_id: investment.id,
+          name: investment.name,
+          code: investment.code,
+          isin: investment.isin,
+          number: investment.number,
+          owner: investment.owner,
+          currency_code: investment.currencyCode,
+          type: investment.type,
+          subtype: investment.subtype,
+          last_month_rate: investment.lastMonthRate,
+          last_twelve_months_rate: investment.lastTwelveMonthsRate,
+          annual_rate: investment.annualRate,
+          date: investment.date,
+          value: investment.value,
+          quantity: investment.quantity,
+          amount: investment.amount,
+          balance: investment.balance,
+          taxes: investment.taxes,
+          taxes2: investment.taxes2,
+          due_date: investment.dueDate,
+          rate: investment.rate,
+          rate_type: investment.rateType,
+          fixed_annual_rate: investment.fixedAnnualRate,
+          issuer: investment.issuer,
+          issue_date: investment.issueDate,
+          amount_profit: investment.amountProfit,
+          amount_withdrawal: investment.amountWithdrawal,
+          amount_original: investment.amountOriginal,
+          status: investment.status,
+          institution: investment.institution,
+          metadata: investment.metadata,
+          provider_id: investment.providerId,
+        }));
 
-        const savedInvestments =
-          await investmentsService.upsertMultipleInvestments(investmentsToSave);
-        console.log("Investments saved to Supabase:", savedInvestments);
-        responseData.investments = savedInvestments;
+      const savedInvestments =
+        await investmentsService.upsertMultipleInvestments(investmentsToSave);
+      responseData.investments = savedInvestments;
 
-        // Fetch and save investment transactions for each investment
-        if (savedInvestments && savedInvestments.length > 0) {
-          const allInvestmentTransactions: InvestmentTransactionRecord[] = [];
+      if (savedInvestments && savedInvestments.length > 0) {
+        const allInvestmentTransactions: InvestmentTransactionRecord[] = [];
 
-          for (const investment of savedInvestments) {
-            try {
-              console.log(
-                `Fetching transactions for investment: ${investment.investment_id}`
-              );
-              const transactionsResponse = await axios.get(
-                `https://api.pluggy.ai/investments/${investment.investment_id}/transactions`,
-                {
-                  params: { pageSize: 500, page: 1 },
-                  headers: {
-                    "X-API-KEY": apiKey,
-                    Accept: "application/json",
-                  },
-                }
-              );
+        for (const investment of savedInvestments) {
+          try {
 
-              if (
-                transactionsResponse.data?.results &&
-                transactionsResponse.data.results.length > 0
-              ) {
-                const transactionsToSave: InvestmentTransactionRecord[] =
-                  transactionsResponse.data.results.map((transaction: any) => ({
-                    transaction_id: transaction.id,
-                    investment_id: investment.investment_id,
-                    trade_date: transaction.tradeDate,
-                    date: transaction.date,
-                    description: transaction.description,
-                    quantity: transaction.quantity,
-                    value: transaction.value,
-                    amount: transaction.amount,
-                    net_amount: transaction.netAmount,
-                    type: transaction.type as
-                      | "BUY"
-                      | "SELL"
-                      | "DIVIDEND"
-                      | "SPLIT"
-                      | "BONUS",
-                    brokerage_number: transaction.brokerageNumber,
-                    expenses: transaction.expenses,
-                  }));
+            const transactionsResponse = await pluggyClient.fetchInvestmentTransactions(
+              investment.investment_id,
+              { pageSize: 500, page: 1 }
+            );
 
-                allInvestmentTransactions.push(...transactionsToSave);
-                console.log(
-                  `Found ${transactionsToSave.length} transactions for investment ${investment.investment_id}`
-                );
-              } else {
-                console.log(
-                  `No transactions found for investment ${investment.investment_id}`
-                );
-              }
-            } catch (transactionError) {
-              console.error(
-                `Error fetching transactions for investment ${investment.investment_id}:`,
-                transactionError
-              );
-              responseData.warnings?.push(
-                `Failed to fetch transactions for investment ${investment.investment_id}: ${
-                  transactionError instanceof Error
-                    ? transactionError.message
-                    : "Unknown error"
-                }`
-              );
+            if (transactionsResponse.results && transactionsResponse.results.length > 0) {
+              const transactionsToSave: InvestmentTransactionRecord[] =
+                transactionsResponse.results.map((transaction: any) => ({
+                  transaction_id: transaction.id,
+                  investment_id: investment.investment_id,
+                  trade_date: transaction.tradeDate,
+                  date: transaction.date,
+                  description: transaction.description,
+                  quantity: transaction.quantity,
+                  value: transaction.value,
+                  amount: transaction.amount,
+                  net_amount: transaction.netAmount,
+                  type: transaction.type as
+                    | "BUY"
+                    | "SELL"
+                    | "DIVIDEND"
+                    | "SPLIT"
+                    | "BONUS",
+                  brokerage_number: transaction.brokerageNumber,
+                  expenses: transaction.expenses,
+                }));
+
+              allInvestmentTransactions.push(...transactionsToSave);
             }
-          }
-
-          if (allInvestmentTransactions.length > 0) {
-            try {
-              const savedInvestmentTransactions =
-                await investmentsService.upsertMultipleInvestmentTransactions(
-                  allInvestmentTransactions
-                );
-              console.log(
-                `Saved ${savedInvestmentTransactions.length} investment transactions to Supabase`
-              );
-            } catch (saveError) {
-              console.error(
-                "Error saving investment transactions to Supabase:",
-                saveError
-              );
-              responseData.warnings?.push(
-                `Failed to save investment transactions: ${
-                  saveError instanceof Error ? saveError.message : "Unknown error"
-                }`
-              );
-            }
+          } catch (transactionError) {
+            console.error(
+              `Error fetching transactions for investment ${investment.investment_id}:`,
+              transactionError
+            );
+            responseData.warnings?.push(
+              `Failed to fetch transactions for investment ${investment.investment_id}: ${
+                transactionError instanceof Error
+                  ? transactionError.message
+                  : "Unknown error"
+              }`
+            );
           }
         }
-      } else {
-        console.log("No investments found for this item");
-        responseData.investments = [];
+
+        if (allInvestmentTransactions.length > 0) {
+          try {
+            const savedInvestmentTransactions =
+              await investmentsService.upsertMultipleInvestmentTransactions(
+                allInvestmentTransactions
+              );
+          } catch (saveError) {
+            console.error(
+              "Error saving investment transactions to Supabase:",
+              saveError
+            );
+            responseData.warnings?.push(
+              `Failed to save investment transactions: ${
+                saveError instanceof Error ? saveError.message : "Unknown error"
+              }`
+            );
+          }
+        }
       }
-    } catch (investmentError) {
-      if (
-        investmentError &&
-        typeof investmentError === "object" &&
-        "response" in investmentError
-      ) {
-        const axiosError = investmentError as any;
-        if (axiosError.response?.status === 404) {
-          console.log("No investments available for this item (404)");
-          responseData.investments = [];
-        } else {
-          console.error("Error fetching/saving investments:", investmentError);
-          responseData.warnings?.push(
-            "Failed to fetch/save investments: " +
-              (axiosError.response?.data?.message ||
-                axiosError.message ||
-                "Unknown error")
-          );
-        }
+    } else {
+      responseData.investments = [];
+    }
+  } catch (investmentError) {
+    if (investmentError instanceof Error && 'response' in investmentError) {
+      const response = investmentError.response as { status?: number };
+      if (response.status === 404) {
+        responseData.investments = [];
       } else {
         console.error("Error fetching/saving investments:", investmentError);
-        responseData.warnings?.push("Failed to fetch/save investments");
+        responseData.warnings?.push(
+          "Failed to fetch/save investments: " + investmentError.message
+        );
       }
+    } else {
+      console.error("Error fetching/saving investments:", investmentError);
+      responseData.warnings?.push("Failed to fetch/save investments");
     }
   }
 
-  if (apiKey) {
-    try {
-      console.log("Fetching loans for item:", itemData.item_id);
-      const loansResponse = await axios.get("https://api.pluggy.ai/loans", {
-        params: { itemId: itemData.item_id },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
+  try {
+    const loansResponse = await pluggyClient.fetchLoans(itemData.item_id);
+    const loansArray = loansResponse.results || [];
 
-      const loansData = loansResponse.data?.results || loansResponse.data;
-      const loansArray = Array.isArray(loansData) ? loansData : [];
+    if (loansArray.length > 0) {
+      const loansToSave: LoanRecord[] = loansArray.map(
+        (loan: any) => ({
+          item_id: itemData.item_id,
+          loan_id: loan.id,
+          contract_number: loan.contractNumber,
+          ipoc_code: loan.ipocCode,
+          product_name: loan.productName,
+          provider_id: loan.providerId,
+          type: loan.type,
+          date: loan.date,
+          contract_date: loan.contractDate,
+          disbursement_dates: loan.disbursementDates,
+          settlement_date: loan.settlementDate,
+          due_date: loan.dueDate,
+          first_installment_due_date: loan.firstInstallmentDueDate,
+          contract_amount: loan.contractAmount,
+          currency_code: loan.currencyCode,
+          cet: loan.cet,
+          installment_periodicity: loan.installmentPeriodicity,
+          installment_periodicity_additional_info:
+            loan.installmentPeriodicityAdditionalInfo,
+          amortization_scheduled: loan.amortizationScheduled,
+          amortization_scheduled_additional_info:
+            loan.amortizationScheduledAdditionalInfo,
+          cnpj_consignee: loan.cnpjConsignee,
+          interest_rates: loan.interestRates,
+          contracted_fees: loan.contractedFees,
+          contracted_finance_charges: loan.contractedFinanceCharges,
+          warranties: loan.warranties,
+          installments: loan.installments,
+          payments: loan.payments,
+        })
+      );
 
-      if (loansArray.length > 0) {
-        const loansToSave: LoanRecord[] = loansArray.map(
-          (loan: any) => ({
-            item_id: itemData.item_id,
-            loan_id: loan.id,
-            contract_number: loan.contractNumber,
-            ipoc_code: loan.ipocCode,
-            product_name: loan.productName,
-            provider_id: loan.providerId,
-            type: loan.type,
-            date: loan.date,
-            contract_date: loan.contractDate,
-            disbursement_dates: loan.disbursementDates,
-            settlement_date: loan.settlementDate,
-            due_date: loan.dueDate,
-            first_installment_due_date: loan.firstInstallmentDueDate,
-            contract_amount: loan.contractAmount,
-            currency_code: loan.currencyCode,
-            cet: loan.cet,
-            installment_periodicity: loan.installmentPeriodicity,
-            installment_periodicity_additional_info:
-              loan.installmentPeriodicityAdditionalInfo,
-            amortization_scheduled: loan.amortizationScheduled,
-            amortization_scheduled_additional_info:
-              loan.amortizationScheduledAdditionalInfo,
-            cnpj_consignee: loan.cnpjConsignee,
-            interest_rates: loan.interestRates,
-            contracted_fees: loan.contractedFees,
-            contracted_finance_charges: loan.contractedFinanceCharges,
-            warranties: loan.warranties,
-            installments: loan.installments,
-            payments: loan.payments,
-          })
-        );
-
-        const savedLoans = await loansService.upsertMultipleLoans(loansToSave);
-        console.log("Loans saved to Supabase:", savedLoans);
-        responseData.loans = savedLoans;
-      } else {
-        console.log("No loans found for this item");
+      const savedLoans = await loansService.upsertMultipleLoans(loansToSave);
+      responseData.loans = savedLoans;
+    } else {
+      responseData.loans = [];
+    }
+  } catch (loanError) {
+    if (loanError instanceof Error && 'response' in loanError) {
+      const response = loanError.response as { status?: number };
+      if (response.status === 404) {
         responseData.loans = [];
-      }
-    } catch (loanError) {
-      if (
-        loanError &&
-        typeof loanError === "object" &&
-        "response" in loanError
-      ) {
-        const axiosError = loanError as any;
-        if (axiosError.response?.status === 404) {
-          console.log("No loans available for this item (404)");
-          responseData.loans = [];
-        } else {
-          console.error("Error fetching/saving loans:", loanError);
-          responseData.warnings?.push(
-            "Failed to fetch/save loans: " +
-              (axiosError.response?.data?.message ||
-                axiosError.message ||
-                "Unknown error")
-          );
-        }
       } else {
         console.error("Error fetching/saving loans:", loanError);
-        responseData.warnings?.push("Failed to fetch/save loans");
+        responseData.warnings?.push(
+          "Failed to fetch/save loans: " + loanError.message
+        );
       }
+    } else {
+      console.error("Error fetching/saving loans:", loanError);
+      responseData.warnings?.push("Failed to fetch/save loans");
     }
   }
 
@@ -639,7 +552,10 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
   const { itemId } = req.query;
 
   if (!itemId || typeof itemId !== "string") {
-    return res.status(400).json({ error: "itemId is required" });
+    return res.status(400).json({ 
+      error: "Bad request",
+      details: "itemId is required" 
+    });
   }
 
   const warnings: string[] = [];
@@ -648,34 +564,34 @@ async function handleDelete(req: VercelRequest, res: VercelResponse) {
     try {
       const pluggyClient = getPluggyClient();
       await pluggyClient.deleteItem(itemId);
-      console.log(`Item ${itemId} deleted from Pluggy`);
     } catch (pluggyError) {
-      const error = pluggyError as any;
-      console.error("Error deleting item from Pluggy:", pluggyError);
-
-      if (error.response?.status === 404) {
-        warnings.push(
-          "Item not found in Pluggy (already deleted or never existed)"
-        );
+      if (pluggyError instanceof Error && 'response' in pluggyError) {
+        const response = pluggyError.response as { status?: number };
+        
+        if (response.status === 404) {
+          warnings.push(
+            "Item not found in Pluggy (already deleted or never existed)"
+          );
+        } else {
+          console.error("Error deleting item from Pluggy:", pluggyError);
+          warnings.push(
+            `Failed to delete from Pluggy: ${pluggyError.message}`
+          );
+        }
       } else {
-        warnings.push(
-          `Failed to delete from Pluggy: ${
-            error.message || "Unknown error"
-          }`
-        );
+        console.error("Error deleting item from Pluggy:", pluggyError);
+        warnings.push("Failed to delete from Pluggy: Unknown error");
       }
     }
   }
 
   try {
     await itemsService.deleteItem(itemId);
-    console.log(`Item ${itemId} deleted from database (cascade delete handled related records)`);
   } catch (itemError) {
     console.error("Error deleting item from database:", itemError);
     return res.status(500).json({
       error: "Failed to delete item from database",
-      details:
-        itemError instanceof Error ? itemError.message : "Unknown error",
+      details: itemError instanceof Error ? itemError.message : "Unknown error",
     });
   }
 

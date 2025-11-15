@@ -1,10 +1,6 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
 import { investmentsService } from "../lib/services/investments";
-import { hasPluggyCredentials } from "../lib/pluggyClient";
-import type { InvestmentRecord } from "../lib/types";
-import axios from "axios";
-
-const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
+import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
@@ -20,174 +16,152 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     switch (req.method) {
       case "GET":
         return await handleGet(req, res);
-      case "POST":
-        return await handlePost(req, res);
       default:
         return res.status(405).json({ error: "Method not allowed" });
     }
   } catch (error) {
     console.error("Error in investments handler:", error);
+    
+    if (error instanceof Error) {
+      if ('response' in error && typeof error.response === 'object') {
+        const response = error.response as { status?: number };
+        
+        switch (response.status) {
+          case 401:
+            return res.status(401).json({ 
+              error: "Authentication failed. Please check Pluggy credentials." 
+            });
+          case 404:
+            return res.status(404).json({ 
+              error: "Resource not found" 
+            });
+          case 429:
+            return res.status(429).json({ 
+              error: "Rate limit exceeded. Please try again later." 
+            });
+          default:
+            break;
+        }
+      }
+      
+      return res.status(500).json({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+    
     return res.status(500).json({
       error: "Internal server error",
-      details: error instanceof Error ? error.message : "Unknown error",
+      details: "Unknown error",
     });
   }
 }
 
 async function handleGet(req: VercelRequest, res: VercelResponse) {
-  const { itemId, investmentId, transactions, fromDb } = req.query;
+  const { itemId, investmentId, transactions, fromDb, type } = req.query;
 
-  if (investmentId && transactions === "true") {
+  if (investmentId && typeof investmentId === "string" && transactions === "true") {
     if (!hasPluggyCredentials()) {
-      return res.status(500).json({
-        error: "Missing Pluggy credentials in environment variables",
+      return res.status(503).json({
+        error: "Pluggy integration not configured",
+        details: "Missing required credentials"
       });
     }
 
     try {
-      let apiKey: string | null = null;
-      try {
-        const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-          clientId: PLUGGY_CLIENT_ID,
-          clientSecret: PLUGGY_CLIENT_SECRET,
-        });
-        apiKey = authResponse.data.apiKey;
-      } catch (authError) {
-        console.error("Error getting Pluggy API key:", authError);
-        return res.status(500).json({
-          error: "Failed to authenticate with Pluggy API",
-        });
-      }
+      const pluggyClient = getPluggyClient();
+      
+      const pageSize = req.query.pageSize
+        ? parseInt(req.query.pageSize as string)
+        : 20;
+      const page = req.query.page ? parseInt(req.query.page as string) : 1;
+
+      const transactionsResponse = await pluggyClient.fetchInvestmentTransactions(
+        investmentId,
+        {
+          pageSize,
+          page,
+        }
+      );
+
+      return res.json({
+        success: true,
+        data: transactionsResponse
+      });
+    } catch (error) {
+      console.error("Error fetching investment transactions from Pluggy:", error);
+      throw error;
+    }
+  }
+
+  if (fromDb === "true") {
+    if (!itemId || typeof itemId !== "string") {
+      return res.status(400).json({ 
+        error: "Bad request",
+        details: "itemId is required when fromDb=true" 
+      });
+    }
+
+    try {
+      const investments = await investmentsService.getInvestmentsByItemId(itemId);
+      return res.json({
+        success: true,
+        data: investments
+      });
+    } catch (error) {
+      console.error("Error fetching investments from database:", error);
+      throw error;
+    }
+  }
+
+  if (itemId && typeof itemId === "string") {
+    if (!hasPluggyCredentials()) {
+      return res.status(503).json({
+        error: "Pluggy integration not configured",
+        details: "Missing required credentials"
+      });
+    }
+
+    try {
+      const pluggyClient = getPluggyClient();
 
       const pageSize = req.query.pageSize
         ? parseInt(req.query.pageSize as string)
         : 20;
       const page = req.query.page ? parseInt(req.query.page as string) : 1;
 
-      const transactionsResponse = await axios.get(
-        `https://api.pluggy.ai/investments/${investmentId}/transactions`,
+      const validTypes = ["MUTUAL_FUND", "SECURITY", "EQUITY", "COE", "FIXED_INCOME", "ETF", "OTHER"] as const;
+      type InvestmentType = typeof validTypes[number];
+      
+      let investmentType: InvestmentType | undefined = undefined;
+      if (type && typeof type === "string") {
+        const upperType = type.toUpperCase();
+        if (validTypes.includes(upperType as InvestmentType)) {
+          investmentType = upperType as InvestmentType;
+        }
+      }
+
+      const investmentsResponse = await pluggyClient.fetchInvestments(
+        itemId,
+        investmentType,
         {
-          params: { pageSize, page },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
+          pageSize,
+          page,
         }
       );
 
-      return res.json(transactionsResponse.data);
-    } catch (error) {
-      console.error("Error fetching investment transactions from Pluggy:", error);
-      return res.status(500).json({
-        error: "Failed to fetch investment transactions from Pluggy",
-        details: error instanceof Error ? error.message : "Unknown error",
+      return res.json({
+        success: true,
+        data: investmentsResponse
       });
-    }
-  }
-
-  if (fromDb === "true") {
-    if (!itemId || typeof itemId !== "string") {
-      return res.status(400).json({ error: "itemId is required when fromDb=true" });
-    }
-
-    try {
-      const investments = await investmentsService.getInvestmentsByItemId(itemId);
-      return res.json(investments);
-    } catch (error) {
-      console.error("Error fetching investments from database:", error);
-      return res.status(500).json({
-        error: "Failed to fetch investments from database",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  }
-
-  if (itemId && typeof itemId === "string") {
-    if (!hasPluggyCredentials()) {
-      return res.status(500).json({
-        error: "Missing Pluggy credentials in environment variables",
-      });
-    }
-
-    try {
-      // Get API key
-      let apiKey: string | null = null;
-      try {
-        const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-          clientId: PLUGGY_CLIENT_ID,
-          clientSecret: PLUGGY_CLIENT_SECRET,
-        });
-        apiKey = authResponse.data.apiKey;
-      } catch (authError) {
-        console.error("Error getting Pluggy API key:", authError);
-        return res.status(500).json({
-          error: "Failed to authenticate with Pluggy API",
-        });
-      }
-
-      const params: any = { itemId };
-      if (req.query.type && typeof req.query.type === "string") {
-        params.type = req.query.type;
-      }
-      if (req.query.pageSize && typeof req.query.pageSize === "string") {
-        params.pageSize = parseInt(req.query.pageSize);
-      }
-      if (req.query.page && typeof req.query.page === "string") {
-        params.page = parseInt(req.query.page);
-      }
-
-      const investmentsResponse = await axios.get(
-        "https://api.pluggy.ai/investments",
-        {
-          params,
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        }
-      );
-
-      return res.json(investmentsResponse.data);
     } catch (error) {
       console.error("Error fetching investments from Pluggy:", error);
-      return res.status(500).json({
-        error: "Failed to fetch investments from Pluggy",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
+      throw error;
     }
   }
 
   return res.status(400).json({
-    error: "itemId parameter is required",
+    error: "Bad request",
+    details: "itemId parameter is required",
   });
 }
-
-async function handlePost(req: VercelRequest, res: VercelResponse) {
-  const { investments } = req.body as { investments: InvestmentRecord[] };
-
-  if (!investments || !Array.isArray(investments)) {
-    return res.status(400).json({ error: "investments array is required" });
-  }
-
-  for (const investment of investments) {
-    if (!investment.investment_id || !investment.item_id || !investment.name) {
-      return res.status(400).json({
-        error:
-          "Each investment must have investment_id, item_id, and name",
-      });
-    }
-  }
-
-  try {
-    const savedInvestments =
-      await investmentsService.upsertMultipleInvestments(investments);
-    return res.status(201).json(savedInvestments);
-  } catch (error) {
-    console.error("Error saving investments:", error);
-    return res.status(500).json({
-      error: "Failed to save investments",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-}
-
