@@ -1,10 +1,7 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
 import { creditCardBillsService } from "../lib/services/credit-card-bills";
-import { hasPluggyCredentials } from "../lib/pluggyClient";
+import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type { CreditCardBillRecord } from "../lib/types";
-import axios from "axios";
-
-const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
@@ -27,9 +24,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   } catch (error) {
     console.error("Error in bills handler:", error);
+    
+    if (error instanceof Error) {
+      if ('response' in error && typeof error.response === 'object') {
+        const response = error.response as { status?: number };
+        
+        switch (response.status) {
+          case 401:
+            return res.status(401).json({ 
+              error: "Authentication failed. Please check Pluggy credentials." 
+            });
+          case 404:
+            return res.status(404).json({ 
+              error: "Resource not found" 
+            });
+          case 429:
+            return res.status(429).json({ 
+              error: "Rate limit exceeded. Please try again later." 
+            });
+          default:
+            break;
+        }
+      }
+      
+      return res.status(500).json({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
+    
     return res.status(500).json({
       error: "Internal server error",
-      details: error instanceof Error ? error.message : "Unknown error",
+      details: "Unknown error",
     });
   }
 }
@@ -37,95 +63,91 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 async function handleGet(req: VercelRequest, res: VercelResponse) {
   const { accountId, fromDb } = req.query;
 
-  // Get bills from database
   if (fromDb === "true") {
     if (!accountId || typeof accountId !== "string") {
-      return res.status(400).json({ error: "accountId is required when fromDb=true" });
+      return res.status(400).json({ 
+        error: "Bad request",
+        details: "accountId is required when fromDb=true" 
+      });
     }
 
     try {
       const bills = await creditCardBillsService.getBillsByAccountId(accountId);
-      return res.json(bills);
+      return res.json({
+        success: true,
+        data: bills
+      });
     } catch (error) {
       console.error("Error fetching bills from database:", error);
-      return res.status(500).json({
-        error: "Failed to fetch bills from database",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
+      throw error;
     }
   }
 
-  // Get bills from Pluggy API
   if (accountId && typeof accountId === "string") {
     if (!hasPluggyCredentials()) {
-      return res.status(500).json({
-        error: "Missing Pluggy credentials in environment variables",
+      return res.status(503).json({
+        error: "Pluggy integration not configured",
+        details: "Missing required credentials"
       });
     }
 
     try {
-      // Get API key
-      let apiKey: string | null = null;
-      try {
-        const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-          clientId: PLUGGY_CLIENT_ID,
-          clientSecret: PLUGGY_CLIENT_SECRET,
-        });
-        apiKey = authResponse.data.apiKey;
-      } catch (authError) {
-        console.error("Error getting Pluggy API key:", authError);
-        return res.status(500).json({
-          error: "Failed to authenticate with Pluggy API",
-        });
-      }
+      const pluggyClient = getPluggyClient();
 
-      const billsResponse = await axios.get("https://api.pluggy.ai/bills", {
-        params: { accountId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
+      const billsResponse = await pluggyClient.fetchCreditCardBills(accountId);
+      
+      return res.json({
+        success: true,
+        data: billsResponse
       });
-
-      return res.json(billsResponse.data);
     } catch (error) {
       console.error("Error fetching bills from Pluggy:", error);
-      return res.status(500).json({
-        error: "Failed to fetch bills from Pluggy",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
+      throw error;
     }
   }
 
   return res.status(400).json({
-    error: "accountId parameter is required",
+    error: "Bad request",
+    details: "accountId parameter is required",
   });
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
-  const { bills } = req.body as { bills: CreditCardBillRecord[] };
+  const { bills } = req.body as { bills?: CreditCardBillRecord[] };
 
   if (!bills || !Array.isArray(bills)) {
-    return res.status(400).json({ error: "bills array is required" });
+    return res.status(400).json({ 
+      error: "Bad request",
+      details: "bills array is required in request body" 
+    });
   }
 
-  for (const bill of bills) {
+  if (bills.length === 0) {
+    return res.status(400).json({ 
+      error: "Bad request",
+      details: "bills array cannot be empty" 
+    });
+  }
+
+  for (let i = 0; i < bills.length; i++) {
+    const bill = bills[i];
     if (!bill.bill_id || !bill.account_id || !bill.due_date || bill.total_amount === undefined) {
       return res.status(400).json({
-        error: "Each bill must have bill_id, account_id, due_date, and total_amount",
+        error: "Bad request",
+        details: `Bill at index ${i} is missing required fields (bill_id, account_id, due_date, or total_amount)`,
       });
     }
   }
 
   try {
     const savedBills = await creditCardBillsService.upsertMultipleBills(bills);
-    return res.status(201).json(savedBills);
+    return res.status(201).json({
+      success: true,
+      data: savedBills,
+      message: `Successfully saved ${savedBills.length} bill(s)`
+    });
   } catch (error) {
     console.error("Error saving bills:", error);
-    return res.status(500).json({
-      error: "Failed to save bills",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
+    throw error;
   }
 }
-
