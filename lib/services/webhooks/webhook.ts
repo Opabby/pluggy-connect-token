@@ -1,4 +1,4 @@
-import { hasPluggyCredentials } from "../../pluggyClient";
+import { getPluggyClient, hasPluggyCredentials } from "../../pluggyClient";
 import { itemsService } from "../items";
 import { accountsService } from "../accounts";
 import { transactionsService } from "../transactions";
@@ -24,20 +24,8 @@ import type {
   LoanRecord,
   CreditCardBillRecord,
 } from "../../types";
-import axios from "axios";
-
-const { PLUGGY_CLIENT_ID, PLUGGY_CLIENT_SECRET } = process.env;
-
-async function getPluggyApiKey(): Promise<string> {
-  const authResponse = await axios.post("https://api.pluggy.ai/auth", {
-    clientId: PLUGGY_CLIENT_ID,
-    clientSecret: PLUGGY_CLIENT_SECRET,
-  });
-  return authResponse.data.apiKey;
-}
 
 export async function processWebhookEvent(payload: WebhookPayload): Promise<void> {
-
   try {
     switch (payload.event) {
       case "item/created":
@@ -126,21 +114,10 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
   const { event } = payload;
 
   try {
-    let apiKey: string;
-    try {
-      apiKey = await getPluggyApiKey();
-    } catch (authError) {
-      console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
-    }
-
-    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
-      headers: {
-        "X-API-KEY": apiKey,
-        Accept: "application/json",
-      },
-    });
-    const item = itemResponse.data;
+    const pluggy = getPluggyClient();
+    
+    // Use SDK to fetch item
+    const item = await pluggy.fetchItem(itemId);
 
     const itemData = item as any;
     const connector = itemData.connector || {};
@@ -163,9 +140,8 @@ async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
       secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
     };
 
-    
     try {
-      const upsertedItem = await itemsService.upsertItem(itemRecord);
+      await itemsService.upsertItem(itemRecord);
     } catch (upsertError) {
       console.error(`Failed to upsert item ${itemId}:`, upsertError);
       throw upsertError;
@@ -209,29 +185,16 @@ async function handleItemStatusEvent(payload: ItemWebhookPayload): Promise<void>
     return;
   }
 
-  const { event } = payload;
-
   try {
     if (!hasPluggyCredentials()) {
       console.error("Missing Pluggy credentials, cannot fetch item data");
       return;
     }
 
-    let apiKey: string;
-    try {
-      apiKey = await getPluggyApiKey();
-    } catch (authError) {
-      console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
-    }
-
-    const itemResponse = await axios.get(`https://api.pluggy.ai/items/${itemId}`, {
-      headers: {
-        "X-API-KEY": apiKey,
-        Accept: "application/json",
-      },
-    });
-    const item = itemResponse.data;
+    const pluggy = getPluggyClient();
+    
+    // Use SDK to fetch item
+    const item = await pluggy.fetchItem(itemId);
 
     const itemData = item as any;
     const connector = itemData.connector || {};
@@ -268,114 +231,62 @@ async function syncItemData(itemId: string): Promise<void> {
   }
 
   try {
-    let apiKey: string;
-    try {
-      apiKey = await getPluggyApiKey();
-    } catch (authError) {
-      console.error("Error authenticating with Pluggy API:", authError);
-      return; // Return early if authentication fails
-    }
+    const pluggy = getPluggyClient();
 
+    // Sync accounts
     try {
-      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
-      if (accountsData.length > 0) {
-        const accountsToUpsert: AccountRecord[] = accountsData.map(
-          (account: any) => ({
-            item_id: itemId,
-            account_id: account.id,
-            type: account.type,
-            subtype: account.subtype,
-            number: account.number,
-            name: account.name,
-            marketing_name: account.marketingName,
-            balance: account.balance,
-            currency_code: account.currencyCode,
-            owner: account.owner,
-            tax_number: account.taxNumber,
-            bank_data: account.bankData,
-            credit_data: account.creditData,
-            disaggregated_credit_limits: account.disaggregatedCreditLimits,
-          })
-        );
+      const { results: accounts } = await pluggy.fetchAccounts(itemId);
+      
+      if (accounts.length > 0) {
+        const accountsToUpsert: AccountRecord[] = accounts.map((account: any) => ({
+          item_id: itemId,
+          account_id: account.id,
+          type: account.type,
+          subtype: account.subtype,
+          number: account.number,
+          name: account.name,
+          marketing_name: account.marketingName,
+          balance: account.balance,
+          currency_code: account.currencyCode,
+          owner: account.owner,
+          tax_number: account.taxNumber,
+          bank_data: account.bankData,
+          credit_data: account.creditData,
+          disaggregated_credit_limits: account.disaggregatedCreditLimits,
+        }));
+        
         await accountsService.upsertMultipleAccounts(accountsToUpsert);
 
-        for (const account of accountsData) {
-          const accountData = account as any;
+        // Sync transactions and bills for each account
+        for (const account of accounts) {
           try {
-            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-              params: { accountId: accountData.id },
-              headers: {
-                "X-API-KEY": apiKey,
-                Accept: "application/json",
-              },
-            });
-            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-            if (transactionsData.length > 0) {
-              for (const transaction of transactionsData) {
-                const transactionData = transaction as any;
-                const transactionDate = transactionData.date 
-                  ? (typeof transactionData.date === 'string' 
-                      ? transactionData.date 
-                      : new Date(transactionData.date).toISOString().split('T')[0])
-                  : new Date().toISOString().split('T')[0];
-                
-                const transactionRecord: TransactionRecord = {
-                  transaction_id: transactionData.id,
-                  account_id: accountData.id,
-                  date: transactionDate,
-                  description: transactionData.description || "",
-                  description_raw: transactionData.descriptionRaw,
-                  amount: transactionData.amount,
-                  amount_in_account_currency: transactionData.amountInAccountCurrency,
-                  balance: transactionData.balance,
-                  currency_code: transactionData.currencyCode,
-                  category: transactionData.category,
-                  category_id: transactionData.categoryId,
-                  provider_code: transactionData.providerCode,
-                  provider_id: transactionData.providerId,
-                  status: transactionData.status,
-                  type: transactionData.type,
-                  operation_type: transactionData.operationType,
-                  operation_category: transactionData.operationCategory,
-                  payment_data: transactionData.paymentData,
-                  credit_card_metadata: transactionData.creditCardMetadata,
-                  merchant: transactionData.merchant,
-                };
-
-                await transactionsService.upsertTransaction(transactionRecord);
+            // Fetch all transactions using SDK
+            const allTransactions = await pluggy.fetchAllTransactions(account.id);
+            
+            if (allTransactions.length > 0) {
+              for (const transaction of allTransactions) {
+                await upsertTransactionRecord(transaction as any, account.id);
               }
             }
           } catch (transactionError) {
-            console.error(`Error syncing transactions for account ${accountData.id}:`, transactionError);
+            console.error(`Error syncing transactions for account ${account.id}:`, transactionError);
           }
 
-          if (accountData.type === "CREDIT") {
+          // Sync credit card bills if it's a credit account
+          if (account.type === "CREDIT") {
             try {
+              const { results: bills } = await pluggy.fetchCreditCardBills(account.id);
 
-              const billsResponse = await axios.get("https://api.pluggy.ai/bills", {
-                params: { accountId: accountData.id },
-                headers: {
-                  "X-API-KEY": apiKey,
-                  Accept: "application/json",
-                },
-              });
-
-              const billsData = billsResponse.data?.results || billsResponse.data;
-              const billsArray = Array.isArray(billsData) ? billsData : [];
-
-              if (billsArray.length > 0) {
-                for (const bill of billsArray) {
+              if (bills.length > 0) {
+                for (const bill of bills) {
                   const billRecord: CreditCardBillRecord = {
                     bill_id: bill.id,
-                    account_id: accountData.id,
-                    due_date: bill.dueDate,
+                    account_id: account.id,
+                    due_date: bill.dueDate 
+                      ? (typeof bill.dueDate === 'string' 
+                          ? bill.dueDate 
+                          : new Date(bill.dueDate).toISOString().split('T')[0])
+                      : undefined,
                     total_amount: bill.totalAmount,
                     total_amount_currency_code: bill.totalAmountCurrencyCode,
                     minimum_payment_amount: bill.minimumPaymentAmount,
@@ -387,7 +298,7 @@ async function syncItemData(itemId: string): Promise<void> {
                 }
               }
             } catch (billError) {
-              console.error(`Error syncing bills for account ${accountData.id}:`, billError);
+              console.error(`Error syncing bills for account ${account.id}:`, billError);
             }
           }
         }
@@ -396,15 +307,10 @@ async function syncItemData(itemId: string): Promise<void> {
       console.error(`Error syncing accounts for item ${itemId}:`, accountError);
     }
 
+    // Sync identity
     try {
-      const identityResponse = await axios.get("https://api.pluggy.ai/identity", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const identity = identityResponse.data;
+      const identity = await pluggy.fetchIdentityByItemId(itemId);
+      
       if (identity) {
         const identityRecord: IdentityRecord = {
           item_id: itemId,
@@ -425,116 +331,125 @@ async function syncItemData(itemId: string): Promise<void> {
         await identityService.upsertIdentity(identityRecord);
       }
     } catch (identityError: any) {
+      // 404 is expected if identity is not available
       if (identityError.response?.status !== 404) {
         console.error(`Error syncing identity for item ${itemId}:`, identityError);
       }
     }
 
+    // Sync investments
     try {
-      const investmentsResponse = await axios.get("https://api.pluggy.ai/investments", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const investmentsData = investmentsResponse.data?.results || investmentsResponse.data || [];
-      if (investmentsData.length > 0) {
-        for (const investment of investmentsData) {
-          const investmentData = investment as any;
+      const { results: investments } = await pluggy.fetchInvestments(itemId);
+      
+      if (investments.length > 0) {
+        for (const investment of investments) {
           const investmentRecord: InvestmentRecord = {
             item_id: itemId,
-            investment_id: investmentData.id,
-            name: investmentData.name,
-            code: investmentData.code,
-            isin: investmentData.isin,
-            number: investmentData.number,
-            owner: investmentData.owner,
-            currency_code: investmentData.currencyCode,
-            type: investmentData.type as any,
-            subtype: investmentData.subtype,
-            last_month_rate: investmentData.lastMonthRate,
-            last_twelve_months_rate: investmentData.lastTwelveMonthsRate,
-            annual_rate: investmentData.annualRate,
-            date: investmentData.date ? (typeof investmentData.date === 'string' ? investmentData.date : new Date(investmentData.date).toISOString().split('T')[0]) : undefined,
-            value: investmentData.value ?? 0,
-            quantity: investmentData.quantity,
-            amount: investmentData.amount,
-            balance: investmentData.balance,
-            taxes: investmentData.taxes,
-            taxes2: investmentData.taxes2,
-            due_date: investmentData.dueDate ? (typeof investmentData.dueDate === 'string' ? investmentData.dueDate : new Date(investmentData.dueDate).toISOString().split('T')[0]) : undefined,
-            rate: investmentData.rate,
-            rate_type: investmentData.rateType as any,
-            fixed_annual_rate: investmentData.fixedAnnualRate ?? investmentData.annualRate,
-            issuer: investmentData.issuer,
-            issue_date: investmentData.issueDate ? (typeof investmentData.issueDate === 'string' ? investmentData.issueDate : new Date(investmentData.issueDate).toISOString().split('T')[0]) : undefined,
-            amount_profit: investmentData.amountProfit,
-            amount_withdrawal: investmentData.amountWithdrawal,
-            amount_original: investmentData.amountOriginal,
-            status: investmentData.status,
-            institution: investmentData.institution,
-            metadata: investmentData.metadata,
-            provider_id: investmentData.providerId,
+            investment_id: investment.id,
+            name: investment.name,
+            code: investment.code,
+            isin: investment.isin,
+            number: investment.number,
+            owner: investment.owner,
+            currency_code: investment.currencyCode,
+            type: investment.type as any,
+            subtype: investment.subtype,
+            last_month_rate: investment.lastMonthRate,
+            last_twelve_months_rate: investment.lastTwelveMonthsRate,
+            annual_rate: investment.annualRate,
+            date: investment.date ? (typeof investment.date === 'string' ? investment.date : new Date(investment.date).toISOString().split('T')[0]) : undefined,
+            value: investment.value ?? 0,
+            quantity: investment.quantity,
+            amount: investment.amount,
+            balance: investment.balance,
+            taxes: investment.taxes,
+            taxes2: investment.taxes2,
+            due_date: investment.dueDate ? (typeof investment.dueDate === 'string' ? investment.dueDate : new Date(investment.dueDate).toISOString().split('T')[0]) : undefined,
+            rate: investment.rate,
+            rate_type: investment.rateType as any,
+            fixed_annual_rate: investment.fixedAnnualRate ?? investment.annualRate,
+            issuer: investment.issuer,
+            issue_date: investment.issueDate ? (typeof investment.issueDate === 'string' ? investment.issueDate : new Date(investment.issueDate).toISOString().split('T')[0]) : undefined,
+            amount_profit: investment.amountProfit,
+            amount_withdrawal: investment.amountWithdrawal,
+            amount_original: investment.amountOriginal,
+            status: investment.status,
+            institution: investment.institution,
+            metadata: investment.metadata,
+            provider_id: (investment as any).providerId,
           };
 
           await investmentsService.upsertInvestment(investmentRecord);
         }
       }
     } catch (investmentError: any) {
+      // 404 is expected if investments are not available
       if (investmentError.response?.status !== 404) {
         console.error(`Error syncing investments for item ${itemId}:`, investmentError);
       }
     }
 
+    // Sync loans
     try {
-      const loansResponse = await axios.get("https://api.pluggy.ai/loans", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
+      const { results: loans } = await pluggy.fetchLoans(itemId);
 
-      const loansData = loansResponse.data?.results || loansResponse.data;
-      const loansArray = Array.isArray(loansData) ? loansData : [];
+      if (loans.length > 0) {
+        for (const loan of loans) {
+          const loanRecord: LoanRecord = {
+            item_id: itemId,
+            loan_id: loan.id,
+            contract_number: loan.contractNumber,
+            ipoc_code: loan.ipocCode,
+            product_name: loan.productName,
+            provider_id: (loan as any).providerId,
+            type: loan.type,
+            date: loan.date 
+              ? (typeof loan.date === 'string' 
+                  ? loan.date 
+                  : new Date(loan.date).toISOString().split('T')[0])
+              : undefined,
+            contract_date: loan.contractDate 
+              ? (typeof loan.contractDate === 'string' 
+                  ? loan.contractDate 
+                  : new Date(loan.contractDate).toISOString().split('T')[0])
+              : undefined,
+            disbursement_dates: loan.disbursementDates,
+            settlement_date: loan.settlementDate 
+              ? (typeof loan.settlementDate === 'string' 
+                  ? loan.settlementDate 
+                  : new Date(loan.settlementDate).toISOString().split('T')[0])
+              : undefined,
+            due_date: loan.dueDate 
+              ? (typeof loan.dueDate === 'string' 
+                  ? loan.dueDate 
+                  : new Date(loan.dueDate).toISOString().split('T')[0])
+              : undefined,
+            first_installment_due_date: loan.firstInstallmentDueDate 
+              ? (typeof loan.firstInstallmentDueDate === 'string' 
+                  ? loan.firstInstallmentDueDate 
+                  : new Date(loan.firstInstallmentDueDate).toISOString().split('T')[0])
+              : undefined,
+            contract_amount: loan.contractAmount,
+            currency_code: loan.currencyCode,
+            cet: loan.CET,
+            installment_periodicity: loan.installmentPeriodicity,
+            installment_periodicity_additional_info: loan.installmentPeriodicityAdditionalInfo,
+            amortization_scheduled: loan.amortizationScheduled,
+            amortization_scheduled_additional_info: loan.amortizationScheduledAdditionalInfo,
+            cnpj_consignee: loan.cnpjConsignee,
+            interest_rates: loan.interestRates,
+            contracted_fees: loan.contractedFees,
+            contracted_finance_charges: loan.contractedFinanceCharges,
+            warranties: loan.warranties,
+            installments: loan.installments,
+            payments: loan.payments,
+          };
 
-        if (loansArray.length > 0) {
-          for (const loan of loansArray) {
-            const loanRecord: LoanRecord = {
-              item_id: itemId,
-              loan_id: loan.id,
-              contract_number: loan.contractNumber,
-              ipoc_code: loan.ipocCode,
-              product_name: loan.productName,
-              provider_id: loan.providerId,
-              type: loan.type,
-              date: loan.date,
-              contract_date: loan.contractDate,
-              disbursement_dates: loan.disbursementDates,
-              settlement_date: loan.settlementDate,
-              due_date: loan.dueDate,
-              first_installment_due_date: loan.firstInstallmentDueDate,
-              contract_amount: loan.contractAmount,
-              currency_code: loan.currencyCode,
-              cet: loan.cet,
-              installment_periodicity: loan.installmentPeriodicity,
-              installment_periodicity_additional_info: loan.installmentPeriodicityAdditionalInfo,
-              amortization_scheduled: loan.amortizationScheduled,
-              amortization_scheduled_additional_info: loan.amortizationScheduledAdditionalInfo,
-              cnpj_consignee: loan.cnpjConsignee,
-              interest_rates: loan.interestRates,
-              contracted_fees: loan.contractedFees,
-              contracted_finance_charges: loan.contractedFinanceCharges,
-              warranties: loan.warranties,
-              installments: loan.installments,
-              payments: loan.payments,
-            };
-
-            await loansService.upsertLoan(loanRecord);
-          }
+          await loansService.upsertLoan(loanRecord);
         }
+      }
     } catch (loanError: any) {
+      // 404 is expected if loans are not available
       if (loanError.response?.status !== 404) {
         console.error(`Error syncing loans for item ${itemId}:`, loanError);
       }
@@ -547,266 +462,54 @@ async function syncItemData(itemId: string): Promise<void> {
 
 async function handleConnectorStatusUpdate(payload: ConnectorStatusWebhookPayload): Promise<void> {
   const { connectorId, data } = payload;
+  // Implementation depends on your business logic
+  console.log(`Connector ${connectorId} status updated:`, data);
 }
 
 async function handleTransactionsCreated(payload: TransactionsWebhookPayload): Promise<void> {
   const { itemId, accountId, transactionIds } = payload;
   
-  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
-    
-    if (!hasPluggyCredentials()) {
-      console.error("Missing Pluggy credentials, cannot fetch transactions");
-      return;
-    }
-
-    try {
-      let apiKey: string;
-      try {
-        apiKey = await getPluggyApiKey();
-      } catch (authError) {
-        console.error("Error authenticating with Pluggy API:", authError);
-        return;
-      }
-      
-      if (accountId) {
-        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-          params: { accountId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-        if (transactionsData.length > 0) {
-          for (const transaction of transactionsData) {
-            const transactionData = transaction as any;
-            const transactionDate = transactionData.date 
-              ? (typeof transactionData.date === 'string' 
-                  ? transactionData.date 
-                  : new Date(transactionData.date).toISOString().split('T')[0])
-              : new Date().toISOString().split('T')[0];
-            
-            const transactionRecord: TransactionRecord = {
-              transaction_id: transactionData.id,
-              account_id: accountId,
-              date: transactionDate,
-              description: transactionData.description || "",
-              description_raw: transactionData.descriptionRaw,
-              amount: transactionData.amount,
-              amount_in_account_currency: transactionData.amountInAccountCurrency,
-              balance: transactionData.balance,
-              currency_code: transactionData.currencyCode,
-              category: transactionData.category,
-              category_id: transactionData.categoryId,
-              provider_code: transactionData.providerCode,
-              provider_id: transactionData.providerId,
-              status: transactionData.status,
-              type: transactionData.type,
-              operation_type: transactionData.operationType,
-              operation_category: transactionData.operationCategory,
-              payment_data: transactionData.paymentData,
-              credit_card_metadata: transactionData.creditCardMetadata,
-              merchant: transactionData.merchant,
-            };
-
-            await transactionsService.upsertTransaction(transactionRecord);
-          }
-        }
-      } else {
-        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
-          params: { itemId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
-        if (accountsData.length > 0) {
-          for (const account of accountsData) {
-            const accountData = account as any;
-            try {
-              const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-                params: { accountId: accountData.id },
-                headers: {
-                  "X-API-KEY": apiKey,
-                  Accept: "application/json",
-                },
-              });
-              const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-              if (transactionsData.length > 0) {
-                for (const transaction of transactionsData) {
-                  const transactionData = transaction as any;
-                  const transactionDate = transactionData.date 
-                    ? (typeof transactionData.date === 'string' 
-                        ? transactionData.date 
-                        : new Date(transactionData.date).toISOString().split('T')[0])
-                    : new Date().toISOString().split('T')[0];
-                  
-                  const transactionRecord: TransactionRecord = {
-                    transaction_id: transactionData.id,
-                    account_id: accountData.id,
-                    date: transactionDate,
-                    description: transactionData.description || "",
-                    description_raw: transactionData.descriptionRaw,
-                    amount: transactionData.amount,
-                    amount_in_account_currency: transactionData.amountInAccountCurrency,
-                    balance: transactionData.balance,
-                    currency_code: transactionData.currencyCode,
-                    category: transactionData.category,
-                    category_id: transactionData.categoryId,
-                    provider_code: transactionData.providerCode,
-                    provider_id: transactionData.providerId,
-                    status: transactionData.status,
-                    type: transactionData.type,
-                    operation_type: transactionData.operationType,
-                    operation_category: transactionData.operationCategory,
-                    payment_data: transactionData.paymentData,
-                    credit_card_metadata: transactionData.creditCardMetadata,
-                    merchant: transactionData.merchant,
-                  };
-
-                  await transactionsService.upsertTransaction(transactionRecord);
-                }
-              }
-            } catch (error) {
-              console.error(`Error fetching transactions for account ${accountData.id}:`, error);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error handling transactions created event (no IDs):`, error);
-      throw error;
-    }
-    return;
-  }
-
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, cannot fetch transactions");
     return;
   }
 
+  const pluggy = getPluggyClient();
+
   try {
-    let apiKey: string;
-    try {
-      apiKey = await getPluggyApiKey();
-    } catch (authError) {
-      console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
-    }
-
     if (accountId) {
-      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-        params: { accountId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-      if (transactionsData.length > 0) {
-        const createdTransactions = transactionsData.filter((t: any) =>
-          transactionIds.includes(t.id)
-        );
-
-        for (const transaction of createdTransactions) {
-          const transactionData = transaction as any;
-          const transactionDate = transactionData.date 
-            ? (typeof transactionData.date === 'string' 
-                ? transactionData.date 
-                : new Date(transactionData.date).toISOString().split('T')[0])
-            : new Date().toISOString().split('T')[0];
-          
-          const transactionRecord: TransactionRecord = {
-            transaction_id: transactionData.id,
-            account_id: accountId,
-            date: transactionDate,
-            description: transactionData.description || "",
-            description_raw: transactionData.descriptionRaw,
-            amount: transactionData.amount,
-            amount_in_account_currency: transactionData.amountInAccountCurrency,
-            balance: transactionData.balance,
-            currency_code: transactionData.currencyCode,
-            category: transactionData.category,
-            category_id: transactionData.categoryId,
-            provider_code: transactionData.providerCode,
-            provider_id: transactionData.providerId,
-            status: transactionData.status,
-            type: transactionData.type,
-            operation_type: transactionData.operationType,
-            operation_category: transactionData.operationCategory,
-            payment_data: transactionData.paymentData,
-            credit_card_metadata: transactionData.creditCardMetadata,
-            merchant: transactionData.merchant,
-          };
-
-          await transactionsService.upsertTransaction(transactionRecord);
+      // Fetch all transactions for the specific account
+      const allTransactions = await pluggy.fetchAllTransactions(accountId);
+      
+      // Filter only the created transactions if IDs are provided
+      const transactionsToProcess = transactionIds && transactionIds.length > 0
+        ? allTransactions.filter((t: any) => transactionIds.includes(t.id))
+        : allTransactions;
+      
+      if (transactionsToProcess.length > 0) {
+        for (const transaction of transactionsToProcess) {
+          await upsertTransactionRecord(transaction as any, accountId);
         }
       }
-    } else {
-      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-
-      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
-      if (accountsData.length > 0) {
-        for (const account of accountsData) {
-          const accountData = account as any;
-          try {
-            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-              params: { accountId: accountData.id },
-              headers: {
-                "X-API-KEY": apiKey,
-                Accept: "application/json",
-              },
-            });
-            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-            if (transactionsData.length > 0) {
-              const createdTransactions = transactionsData.filter((t: any) =>
-                transactionIds.includes(t.id)
-              );
-
-              for (const transaction of createdTransactions) {
-                const transactionData = transaction as any;
-                const transactionDate = transactionData.date 
-                  ? (typeof transactionData.date === 'string' 
-                      ? transactionData.date 
-                      : new Date(transactionData.date).toISOString().split('T')[0])
-                  : new Date().toISOString().split('T')[0];
-                
-                const transactionRecord: TransactionRecord = {
-                  transaction_id: transactionData.id,
-                  account_id: accountData.id,
-                  date: transactionDate,
-                  description: transactionData.description || "",
-                  description_raw: transactionData.descriptionRaw,
-                  amount: transactionData.amount,
-                  amount_in_account_currency: transactionData.amountInAccountCurrency,
-                  balance: transactionData.balance,
-                  currency_code: transactionData.currencyCode,
-                  category: transactionData.category,
-                  category_id: transactionData.categoryId,
-                  provider_code: transactionData.providerCode,
-                  provider_id: transactionData.providerId,
-                  status: transactionData.status,
-                  type: transactionData.type,
-                  operation_type: transactionData.operationType,
-                  operation_category: transactionData.operationCategory,
-                  payment_data: transactionData.paymentData,
-                  credit_card_metadata: transactionData.creditCardMetadata,
-                  merchant: transactionData.merchant,
-                };
-
-                await transactionsService.upsertTransaction(transactionRecord);
-              }
+    } else if (itemId) {
+      // If no accountId, fetch all accounts for the item
+      const { results: accounts } = await pluggy.fetchAccounts(itemId);
+      
+      for (const account of accounts) {
+        try {
+          const allTransactions = await pluggy.fetchAllTransactions(account.id);
+          
+          const transactionsToProcess = transactionIds && transactionIds.length > 0
+            ? allTransactions.filter((t: any) => transactionIds.includes(t.id))
+            : allTransactions;
+          
+          if (transactionsToProcess.length > 0) {
+            for (const transaction of transactionsToProcess) {
+              await upsertTransactionRecord(transaction as any, account.id);
             }
-          } catch (error) {
-            console.error(`Error fetching transactions for account ${accountData.id}:`, error);
           }
+        } catch (error) {
+          console.error(`Error fetching transactions for account ${account.id}:`, error);
         }
       }
     }
@@ -817,274 +520,12 @@ async function handleTransactionsCreated(payload: TransactionsWebhookPayload): P
 }
 
 async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): Promise<void> {
-  const { itemId, accountId, transactionIds } = payload;
-
-  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
-
-    if (!hasPluggyCredentials()) {
-      console.error("Missing Pluggy credentials, cannot fetch transactions");
-      return;
-    }
-
-    try {
-      let apiKey: string;
-      try {
-        apiKey = await getPluggyApiKey();
-      } catch (authError) {
-        console.error("Error authenticating with Pluggy API:", authError);
-        return;
-      }
-      
-      if (accountId) {
-        const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-          params: { accountId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-        if (transactionsData.length > 0) {
-          for (const transaction of transactionsData) {
-            const transactionData = transaction as any;
-            const transactionDate = transactionData.date 
-              ? (typeof transactionData.date === 'string' 
-                  ? transactionData.date 
-                  : new Date(transactionData.date).toISOString().split('T')[0])
-              : new Date().toISOString().split('T')[0];
-            
-            const transactionRecord: TransactionRecord = {
-              transaction_id: transactionData.id,
-              account_id: accountId,
-              date: transactionDate,
-              description: transactionData.description || "",
-              description_raw: transactionData.descriptionRaw,
-              amount: transactionData.amount,
-              amount_in_account_currency: transactionData.amountInAccountCurrency,
-              balance: transactionData.balance,
-              currency_code: transactionData.currencyCode,
-              category: transactionData.category,
-              category_id: transactionData.categoryId,
-              provider_code: transactionData.providerCode,
-              provider_id: transactionData.providerId,
-              status: transactionData.status,
-              type: transactionData.type,
-              operation_type: transactionData.operationType,
-              operation_category: transactionData.operationCategory,
-              payment_data: transactionData.paymentData,
-              credit_card_metadata: transactionData.creditCardMetadata,
-              merchant: transactionData.merchant,
-            };
-
-            await transactionsService.upsertTransaction(transactionRecord);
-          }
-        }
-      } else {
-        const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
-          params: { itemId },
-          headers: {
-            "X-API-KEY": apiKey,
-            Accept: "application/json",
-          },
-        });
-        const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
-        if (accountsData.length > 0) {
-          for (const account of accountsData) {
-            const accountData = account as any;
-            try {
-              const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-                params: { accountId: accountData.id },
-                headers: {
-                  "X-API-KEY": apiKey,
-                  Accept: "application/json",
-                },
-              });
-              const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-              if (transactionsData.length > 0) {
-                for (const transaction of transactionsData) {
-                  const transactionData = transaction as any;
-                  const transactionDate = transactionData.date 
-                    ? (typeof transactionData.date === 'string' 
-                        ? transactionData.date 
-                        : new Date(transactionData.date).toISOString().split('T')[0])
-                    : new Date().toISOString().split('T')[0];
-                  
-                  const transactionRecord: TransactionRecord = {
-                    transaction_id: transactionData.id,
-                    account_id: accountData.id,
-                    date: transactionDate,
-                    description: transactionData.description || "",
-                    description_raw: transactionData.descriptionRaw,
-                    amount: transactionData.amount,
-                    amount_in_account_currency: transactionData.amountInAccountCurrency,
-                    balance: transactionData.balance,
-                    currency_code: transactionData.currencyCode,
-                    category: transactionData.category,
-                    category_id: transactionData.categoryId,
-                    provider_code: transactionData.providerCode,
-                    provider_id: transactionData.providerId,
-                    status: transactionData.status,
-                    type: transactionData.type,
-                    operation_type: transactionData.operationType,
-                    operation_category: transactionData.operationCategory,
-                    payment_data: transactionData.paymentData,
-                    credit_card_metadata: transactionData.creditCardMetadata,
-                    merchant: transactionData.merchant,
-                  };
-
-                  await transactionsService.upsertTransaction(transactionRecord);
-                }
-              }
-            } catch (error) {
-              console.error(`Error fetching transactions for account ${accountData.id}:`, error);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error handling transactions updated event (no IDs):`, error);
-      throw error;
-    }
-    return;
-  }
-
-  if (!hasPluggyCredentials()) {
-    console.error("Missing Pluggy credentials, cannot fetch transactions");
-    return;
-  }
-
-  try {
-    let apiKey: string;
-    try {
-      apiKey = await getPluggyApiKey();
-    } catch (authError) {
-      console.error("Error authenticating with Pluggy API:", authError);
-      throw new Error("Failed to authenticate with Pluggy API");
-    }
-
-    if (accountId) {
-      const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-        params: { accountId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-      const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-      if (transactionsData.length > 0) {
-        const updatedTransactions = transactionsData.filter((t: any) =>
-          transactionIds.includes(t.id)
-        );
-
-        for (const transaction of updatedTransactions) {
-          const transactionData = transaction as any;
-          const transactionDate = transactionData.date 
-            ? (typeof transactionData.date === 'string' 
-                ? transactionData.date 
-                : new Date(transactionData.date).toISOString().split('T')[0])
-            : new Date().toISOString().split('T')[0];
-          
-          const transactionRecord: TransactionRecord = {
-            transaction_id: transactionData.id,
-            account_id: accountId,
-            date: transactionDate,
-            description: transactionData.description || "",
-            description_raw: transactionData.descriptionRaw,
-            amount: transactionData.amount,
-            amount_in_account_currency: transactionData.amountInAccountCurrency,
-            balance: transactionData.balance,
-            currency_code: transactionData.currencyCode,
-            category: transactionData.category,
-            category_id: transactionData.categoryId,
-            provider_code: transactionData.providerCode,
-            provider_id: transactionData.providerId,
-            status: transactionData.status,
-            type: transactionData.type,
-            operation_type: transactionData.operationType,
-            operation_category: transactionData.operationCategory,
-            payment_data: transactionData.paymentData,
-            credit_card_metadata: transactionData.creditCardMetadata,
-            merchant: transactionData.merchant,
-          };
-
-          await transactionsService.upsertTransaction(transactionRecord);
-        }
-      }
-    } else {
-      const accountsResponse = await axios.get("https://api.pluggy.ai/accounts", {
-        params: { itemId },
-        headers: {
-          "X-API-KEY": apiKey,
-          Accept: "application/json",
-        },
-      });
-
-      const accountsData = accountsResponse.data?.results || accountsResponse.data || [];
-      if (accountsData.length > 0) {
-        for (const account of accountsData) {
-          const accountData = account as any;
-          try {
-            const transactionsResponse = await axios.get("https://api.pluggy.ai/transactions", {
-              params: { accountId: accountData.id },
-              headers: {
-                "X-API-KEY": apiKey,
-                Accept: "application/json",
-              },
-            });
-            const transactionsData = transactionsResponse.data?.results || transactionsResponse.data || [];
-            if (transactionsData.length > 0) {
-              const updatedTransactions = transactionsData.filter((t: any) =>
-                transactionIds.includes(t.id)
-              );
-
-              for (const transaction of updatedTransactions) {
-                const transactionData = transaction as any;
-                const transactionDate = transactionData.date 
-                  ? (typeof transactionData.date === 'string' 
-                      ? transactionData.date 
-                      : new Date(transactionData.date).toISOString().split('T')[0])
-                  : new Date().toISOString().split('T')[0];
-                
-                const transactionRecord: TransactionRecord = {
-                  transaction_id: transactionData.id,
-                  account_id: accountData.id,
-                  date: transactionDate,
-                  description: transactionData.description || "",
-                  description_raw: transactionData.descriptionRaw,
-                  amount: transactionData.amount,
-                  amount_in_account_currency: transactionData.amountInAccountCurrency,
-                  balance: transactionData.balance,
-                  currency_code: transactionData.currencyCode,
-                  category: transactionData.category,
-                  category_id: transactionData.categoryId,
-                  provider_code: transactionData.providerCode,
-                  provider_id: transactionData.providerId,
-                  status: transactionData.status,
-                  type: transactionData.type,
-                  operation_type: transactionData.operationType,
-                  operation_category: transactionData.operationCategory,
-                  payment_data: transactionData.paymentData,
-                  credit_card_metadata: transactionData.creditCardMetadata,
-                  merchant: transactionData.merchant,
-                };
-
-                await transactionsService.upsertTransaction(transactionRecord);
-              }
-            }
-          } catch (error) {
-            console.error(`Error fetching transactions for account ${accountData.id}:`, error);
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error(`Error handling transactions updated event:`, error);
-    throw error;
-  }
+  // Same logic as handleTransactionsCreated since we're upserting
+  await handleTransactionsCreated(payload);
 }
 
 async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): Promise<void> {
-  const { itemId, accountId, transactionIds } = payload;
+  const { transactionIds } = payload;
   
   if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
     return;
@@ -1100,21 +541,64 @@ async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): P
 
 async function handlePaymentIntentEvent(payload: PaymentIntentWebhookPayload): Promise<void> {
   const { event, paymentIntentId, paymentRequestId, bulkPaymentId } = payload;
+  // Implementation depends on your business logic
+  console.log(`Payment intent event ${event}:`, { paymentIntentId, paymentRequestId, bulkPaymentId });
 }
 
 async function handlePaymentRequestUpdated(payload: PaymentRequestWebhookPayload): Promise<void> {
   const { paymentRequestId, status } = payload;
+  // Implementation depends on your business logic
+  console.log(`Payment request ${paymentRequestId} updated to status:`, status);
 }
 
 async function handleScheduledPaymentEvent(payload: ScheduledPaymentWebhookPayload): Promise<void> {
   const { event, scheduledPaymentId, paymentRequestId } = payload;
+  // Implementation depends on your business logic
+  console.log(`Scheduled payment event ${event}:`, { scheduledPaymentId, paymentRequestId });
 }
 
 async function handleAutomaticPixPaymentEvent(payload: AutomaticPixPaymentWebhookPayload): Promise<void> {
   const { event, automaticPixPaymentId, paymentRequestId, endToEndId } = payload;
+  // Implementation depends on your business logic
+  console.log(`Automatic Pix payment event ${event}:`, { automaticPixPaymentId, paymentRequestId, endToEndId });
 }
 
 async function handlePaymentRefundEvent(payload: PaymentRefundWebhookPayload): Promise<void> {
   const { event, refundId, paymentRequestId } = payload;
+  // Implementation depends on your business logic
+  console.log(`Payment refund event ${event}:`, { refundId, paymentRequestId });
 }
 
+// Helper function to upsert transaction record
+async function upsertTransactionRecord(transaction: any, accountId: string): Promise<void> {
+  const transactionDate = transaction.date 
+    ? (typeof transaction.date === 'string' 
+        ? transaction.date 
+        : new Date(transaction.date).toISOString().split('T')[0])
+    : new Date().toISOString().split('T')[0];
+  
+  const transactionRecord: TransactionRecord = {
+    transaction_id: transaction.id,
+    account_id: accountId,
+    date: transactionDate,
+    description: transaction.description || "",
+    description_raw: transaction.descriptionRaw,
+    amount: transaction.amount,
+    amount_in_account_currency: transaction.amountInAccountCurrency,
+    balance: transaction.balance,
+    currency_code: transaction.currencyCode,
+    category: transaction.category,
+    category_id: transaction.categoryId,
+    provider_code: transaction.providerCode,
+    provider_id: transaction.providerId,
+    status: transaction.status,
+    type: transaction.type,
+    operation_type: transaction.operationType,
+    operation_category: transaction.operationCategory,
+    payment_data: transaction.paymentData,
+    credit_card_metadata: transaction.creditCardMetadata,
+    merchant: transaction.merchant,
+  };
+
+  await transactionsService.upsertTransaction(transactionRecord);
+}
