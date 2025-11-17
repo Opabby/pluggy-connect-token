@@ -1,11 +1,11 @@
-import { getPluggyClient, hasPluggyCredentials } from "../../pluggyClient";
-import { itemsService } from "../items";
-import { accountsService } from "../accounts";
-import { transactionsService } from "../transactions";
-import { identityService } from "../identity";
-import { investmentsService } from "../investments";
-import { loansService } from "../loans";
-import { creditCardBillsService } from "../credit-card-bills";
+import { getPluggyClient, hasPluggyCredentials } from "../pluggyClient";
+import { itemsService } from "./items.service";
+import { accountsService } from "./accounts.service";
+import { transactionsService } from "./transactions.service";
+import { identityService } from "./identity.service";
+import { investmentsService } from "./investments.service";
+import { loansService } from "./loans.service";
+import { creditCardBillsService } from "./credit-card-bills.service";
 import type {
   WebhookPayload,
   ItemWebhookPayload,
@@ -23,7 +23,10 @@ import type {
   InvestmentRecord,
   LoanRecord,
   CreditCardBillRecord,
-} from "../../types";
+} from "../types";
+import { handleItemEvent, handleItemDeleted, handleItemStatusEvent } from "./webhook-handlers/item.handler";
+import { handleTransactionsCreated } from "./webhook-handlers/transaction.handler";
+import { upsertTransactionRecord } from "./webhook-handlers/utils";
 
 export async function processWebhookEvent(payload: WebhookPayload): Promise<void> {
   try {
@@ -99,132 +102,7 @@ export async function processWebhookEvent(payload: WebhookPayload): Promise<void
   }
 }
 
-async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
-  if (!hasPluggyCredentials()) {
-    console.error("Missing Pluggy credentials, cannot fetch item data");
-    return;
-  }
-
-  const itemId = payload.itemId || payload.id;
-  if (!itemId) {
-    console.error("Missing itemId in webhook payload");
-    return;
-  }
-
-  const { event } = payload;
-
-  try {
-    const pluggy = getPluggyClient();
-    
-    // Use SDK to fetch item
-    const item = await pluggy.fetchItem(itemId);
-
-    const itemData = item as any;
-    const connector = itemData.connector || {};
-    
-    const itemRecord: PluggyItemRecord = {
-      item_id: itemData.id,
-      user_id: itemData.userId || payload.clientUserId || undefined,
-      connector_id: connector.id ? connector.id.toString() : itemData.connectorId?.toString(),
-      connector_name: connector.name || itemData.connectorName,
-      connector_image_url: connector.imageUrl || connector.image_url || itemData.connectorImageUrl,
-      status: itemData.status,
-      created_at: itemData.createdAt,
-      updated_at: itemData.updatedAt,
-      last_updated_at: itemData.lastUpdatedAt,
-      webhook_url: itemData.webhookUrl || itemData.webhook_url,
-      parameters: itemData.parameters,
-      institution_name: connector.name || itemData.connectorName || itemData.institutionName,
-      institution_url: connector.url || connector.website || itemData.institutionUrl,
-      primary_color: connector.primaryColor || connector.primary_color || itemData.primaryColor,
-      secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
-    };
-
-    try {
-      await itemsService.upsertItem(itemRecord);
-    } catch (upsertError) {
-      console.error(`Failed to upsert item ${itemId}:`, upsertError);
-      throw upsertError;
-    }
-
-    if (event === "item/created" || event === "item/updated" || event === "item/login_succeeded") {
-      try {
-        await syncItemData(itemId);
-      } catch (syncError) {
-        console.error(`Error syncing data for item ${itemId}:`, syncError);
-        console.error("Sync error details:", syncError instanceof Error ? syncError.stack : syncError);
-      }
-    }
-  } catch (error) {
-    console.error(`Error handling item event for ${itemId}:`, error);
-    throw error;
-  }
-}
-
-async function handleItemDeleted(payload: ItemWebhookPayload): Promise<void> {
-  const itemId = payload.itemId || payload.id;
-  if (!itemId) {
-    console.error("Missing itemId in webhook payload");
-    return;
-  }
-
-  try {
-    await itemsService.deleteItem(itemId);
-  } catch (error) {
-    console.error(`Error deleting item ${itemId}:`, error);
-    if (error instanceof Error && !error.message.includes("PGRST116")) {
-      throw error;
-    }
-  }
-}
-
-async function handleItemStatusEvent(payload: ItemWebhookPayload): Promise<void> {
-  const itemId = payload.itemId || payload.id;
-  if (!itemId) {
-    console.error("Missing itemId in webhook payload");
-    return;
-  }
-
-  try {
-    if (!hasPluggyCredentials()) {
-      console.error("Missing Pluggy credentials, cannot fetch item data");
-      return;
-    }
-
-    const pluggy = getPluggyClient();
-    
-    // Use SDK to fetch item
-    const item = await pluggy.fetchItem(itemId);
-
-    const itemData = item as any;
-    const connector = itemData.connector || {};
-    
-    const itemRecord: PluggyItemRecord = {
-      item_id: itemData.id,
-      user_id: itemData.userId || payload.clientUserId || undefined,
-      connector_id: connector.id ? connector.id.toString() : itemData.connectorId?.toString(),
-      connector_name: connector.name || itemData.connectorName,
-      connector_image_url: connector.imageUrl || connector.image_url || itemData.connectorImageUrl,
-      status: itemData.status,
-      created_at: itemData.createdAt,
-      updated_at: itemData.updatedAt,
-      last_updated_at: itemData.lastUpdatedAt,
-      webhook_url: itemData.webhookUrl || itemData.webhook_url,
-      parameters: itemData.parameters,
-      institution_name: connector.name || itemData.connectorName || itemData.institutionName,
-      institution_url: connector.url || connector.website || itemData.institutionUrl,
-      primary_color: connector.primaryColor || connector.primary_color || itemData.primaryColor,
-      secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
-    };
-
-    await itemsService.upsertItem(itemRecord);
-  } catch (error) {
-    console.error(`Error handling item status event for ${itemId}:`, error);
-    throw error;
-  }
-}
-
-async function syncItemData(itemId: string): Promise<void> {
+export async function syncItemData(itemId: string): Promise<void> {
   if (!hasPluggyCredentials()) {
     console.error("Missing Pluggy credentials, cannot sync item data");
     return;
@@ -233,7 +111,6 @@ async function syncItemData(itemId: string): Promise<void> {
   try {
     const pluggy = getPluggyClient();
 
-    // Sync accounts
     try {
       const { results: accounts } = await pluggy.fetchAccounts(itemId);
       
@@ -257,10 +134,8 @@ async function syncItemData(itemId: string): Promise<void> {
         
         await accountsService.upsertMultipleAccounts(accountsToUpsert);
 
-        // Sync transactions and bills for each account
         for (const account of accounts) {
           try {
-            // Fetch all transactions using SDK
             const allTransactions = await pluggy.fetchAllTransactions(account.id);
             
             if (allTransactions.length > 0) {
@@ -272,7 +147,6 @@ async function syncItemData(itemId: string): Promise<void> {
             console.error(`Error syncing transactions for account ${account.id}:`, transactionError);
           }
 
-          // Sync credit card bills if it's a credit account
           if (account.type === "CREDIT") {
             try {
               const { results: bills } = await pluggy.fetchCreditCardBills(account.id);
@@ -307,7 +181,6 @@ async function syncItemData(itemId: string): Promise<void> {
       console.error(`Error syncing accounts for item ${itemId}:`, accountError);
     }
 
-    // Sync identity
     try {
       const identity = await pluggy.fetchIdentityByItemId(itemId);
       
@@ -331,13 +204,11 @@ async function syncItemData(itemId: string): Promise<void> {
         await identityService.upsertIdentity(identityRecord);
       }
     } catch (identityError: any) {
-      // 404 is expected if identity is not available
       if (identityError.response?.status !== 404) {
         console.error(`Error syncing identity for item ${itemId}:`, identityError);
       }
     }
 
-    // Sync investments
     try {
       const { results: investments } = await pluggy.fetchInvestments(itemId);
       
@@ -383,13 +254,11 @@ async function syncItemData(itemId: string): Promise<void> {
         }
       }
     } catch (investmentError: any) {
-      // 404 is expected if investments are not available
       if (investmentError.response?.status !== 404) {
         console.error(`Error syncing investments for item ${itemId}:`, investmentError);
       }
     }
 
-    // Sync loans
     try {
       const { results: loans } = await pluggy.fetchLoans(itemId);
 
@@ -449,7 +318,6 @@ async function syncItemData(itemId: string): Promise<void> {
         }
       }
     } catch (loanError: any) {
-      // 404 is expected if loans are not available
       if (loanError.response?.status !== 404) {
         console.error(`Error syncing loans for item ${itemId}:`, loanError);
       }
@@ -462,65 +330,10 @@ async function syncItemData(itemId: string): Promise<void> {
 
 async function handleConnectorStatusUpdate(payload: ConnectorStatusWebhookPayload): Promise<void> {
   const { connectorId, data } = payload;
-  // Implementation depends on your business logic
   console.log(`Connector ${connectorId} status updated:`, data);
 }
 
-async function handleTransactionsCreated(payload: TransactionsWebhookPayload): Promise<void> {
-  const { itemId, accountId, transactionIds } = payload;
-  
-  if (!hasPluggyCredentials()) {
-    console.error("Missing Pluggy credentials, cannot fetch transactions");
-    return;
-  }
-
-  const pluggy = getPluggyClient();
-
-  try {
-    if (accountId) {
-      // Fetch all transactions for the specific account
-      const allTransactions = await pluggy.fetchAllTransactions(accountId);
-      
-      // Filter only the created transactions if IDs are provided
-      const transactionsToProcess = transactionIds && transactionIds.length > 0
-        ? allTransactions.filter((t: any) => transactionIds.includes(t.id))
-        : allTransactions;
-      
-      if (transactionsToProcess.length > 0) {
-        for (const transaction of transactionsToProcess) {
-          await upsertTransactionRecord(transaction as any, accountId);
-        }
-      }
-    } else if (itemId) {
-      // If no accountId, fetch all accounts for the item
-      const { results: accounts } = await pluggy.fetchAccounts(itemId);
-      
-      for (const account of accounts) {
-        try {
-          const allTransactions = await pluggy.fetchAllTransactions(account.id);
-          
-          const transactionsToProcess = transactionIds && transactionIds.length > 0
-            ? allTransactions.filter((t: any) => transactionIds.includes(t.id))
-            : allTransactions;
-          
-          if (transactionsToProcess.length > 0) {
-            for (const transaction of transactionsToProcess) {
-              await upsertTransactionRecord(transaction as any, account.id);
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching transactions for account ${account.id}:`, error);
-        }
-      }
-    }
-  } catch (error) {
-    console.error(`Error handling transactions created event:`, error);
-    throw error;
-  }
-}
-
 async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): Promise<void> {
-  // Same logic as handleTransactionsCreated since we're upserting
   await handleTransactionsCreated(payload);
 }
 
@@ -539,66 +352,27 @@ async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): P
   }
 }
 
-async function handlePaymentIntentEvent(payload: PaymentIntentWebhookPayload): Promise<void> {
-  const { event, paymentIntentId, paymentRequestId, bulkPaymentId } = payload;
-  // Implementation depends on your business logic
-  console.log(`Payment intent event ${event}:`, { paymentIntentId, paymentRequestId, bulkPaymentId });
-}
+// async function handlePaymentIntentEvent(payload: PaymentIntentWebhookPayload): Promise<void> {
+//   const { event, paymentIntentId, paymentRequestId, bulkPaymentId } = payload;
+//   console.log(`Payment intent event ${event}:`, { paymentIntentId, paymentRequestId, bulkPaymentId });
+// }
 
-async function handlePaymentRequestUpdated(payload: PaymentRequestWebhookPayload): Promise<void> {
-  const { paymentRequestId, status } = payload;
-  // Implementation depends on your business logic
-  console.log(`Payment request ${paymentRequestId} updated to status:`, status);
-}
+// async function handlePaymentRequestUpdated(payload: PaymentRequestWebhookPayload): Promise<void> {
+//   const { paymentRequestId, status } = payload;
+//   console.log(`Payment request ${paymentRequestId} updated to status:`, status);
+// }
 
-async function handleScheduledPaymentEvent(payload: ScheduledPaymentWebhookPayload): Promise<void> {
-  const { event, scheduledPaymentId, paymentRequestId } = payload;
-  // Implementation depends on your business logic
-  console.log(`Scheduled payment event ${event}:`, { scheduledPaymentId, paymentRequestId });
-}
+// async function handleScheduledPaymentEvent(payload: ScheduledPaymentWebhookPayload): Promise<void> {
+//   const { event, scheduledPaymentId, paymentRequestId } = payload;
+//   console.log(`Scheduled payment event ${event}:`, { scheduledPaymentId, paymentRequestId });
+// }
 
-async function handleAutomaticPixPaymentEvent(payload: AutomaticPixPaymentWebhookPayload): Promise<void> {
-  const { event, automaticPixPaymentId, paymentRequestId, endToEndId } = payload;
-  // Implementation depends on your business logic
-  console.log(`Automatic Pix payment event ${event}:`, { automaticPixPaymentId, paymentRequestId, endToEndId });
-}
+// async function handleAutomaticPixPaymentEvent(payload: AutomaticPixPaymentWebhookPayload): Promise<void> {
+//   const { event, automaticPixPaymentId, paymentRequestId, endToEndId } = payload;
+//   console.log(`Automatic Pix payment event ${event}:`, { automaticPixPaymentId, paymentRequestId, endToEndId });
+// }
 
-async function handlePaymentRefundEvent(payload: PaymentRefundWebhookPayload): Promise<void> {
-  const { event, refundId, paymentRequestId } = payload;
-  // Implementation depends on your business logic
-  console.log(`Payment refund event ${event}:`, { refundId, paymentRequestId });
-}
-
-// Helper function to upsert transaction record
-async function upsertTransactionRecord(transaction: any, accountId: string): Promise<void> {
-  const transactionDate = transaction.date 
-    ? (typeof transaction.date === 'string' 
-        ? transaction.date 
-        : new Date(transaction.date).toISOString().split('T')[0])
-    : new Date().toISOString().split('T')[0];
-  
-  const transactionRecord: TransactionRecord = {
-    transaction_id: transaction.id,
-    account_id: accountId,
-    date: transactionDate,
-    description: transaction.description || "",
-    description_raw: transaction.descriptionRaw,
-    amount: transaction.amount,
-    amount_in_account_currency: transaction.amountInAccountCurrency,
-    balance: transaction.balance,
-    currency_code: transaction.currencyCode,
-    category: transaction.category,
-    category_id: transaction.categoryId,
-    provider_code: transaction.providerCode,
-    provider_id: transaction.providerId,
-    status: transaction.status,
-    type: transaction.type,
-    operation_type: transaction.operationType,
-    operation_category: transaction.operationCategory,
-    payment_data: transaction.paymentData,
-    credit_card_metadata: transaction.creditCardMetadata,
-    merchant: transaction.merchant,
-  };
-
-  await transactionsService.upsertTransaction(transactionRecord);
-}
+// async function handlePaymentRefundEvent(payload: PaymentRefundWebhookPayload): Promise<void> {
+//   const { event, refundId, paymentRequestId } = payload;
+//   console.log(`Payment refund event ${event}:`, { refundId, paymentRequestId });
+// }

@@ -1,5 +1,5 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
-import { processWebhookEvent } from "../lib/services/webhooks/webhook";
+import { processWebhookEvent } from "../lib/services/sync.service";
 import type { WebhookPayload } from "../lib/types";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
