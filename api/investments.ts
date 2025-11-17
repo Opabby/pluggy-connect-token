@@ -1,5 +1,5 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
-import { investmentsService } from "../lib/services/investments";
+import { investmentsService } from "../lib/services/investments.service";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

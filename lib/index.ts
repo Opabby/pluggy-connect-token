@@ -1,10 +1,10 @@
-import { itemsService } from "./services/items";
-import { accountsService } from "./services/accounts";
-import { transactionsService } from "./services/transactions";
-import { creditCardBillsService } from "./services/credit-card-bills";
-import { investmentsService } from "./services/investments";
-import { loansService } from "./services/loans";
-import { identityService } from "./services/identity";
+import { itemsService } from "./services/items.service";
+import { accountsService } from "./services/accounts.service";
+import { transactionsService } from "./services/transactions.service";
+import { creditCardBillsService } from "./services/credit-card-bills.service";
+import { investmentsService } from "./services/investments.service";
+import { loansService } from "./services/loans.service";
+import { identityService } from "./services/identity.service";
 
 export default {
   items: itemsService,

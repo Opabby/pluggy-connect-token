@@ -1,11 +1,11 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
-import { itemsService } from "../lib/services/items";
-import { accountsService } from "../lib/services/accounts";
-import { identityService } from "../lib/services/identity";
-import { transactionsService } from "../lib/services/transactions";
-import { investmentsService } from "../lib/services/investments";
-import { loansService } from "../lib/services/loans";
-import { creditCardBillsService } from "../lib/services/credit-card-bills";
+import { itemsService } from "../lib/services/items.service";
+import { accountsService } from "../lib/services/accounts.service";
+import { identityService } from "../lib/services/identity.service";
+import { transactionsService } from "../lib/services/transactions.service";
+import { investmentsService } from "../lib/services/investments.service";
+import { loansService } from "../lib/services/loans.service";
+import { creditCardBillsService } from "../lib/services/credit-card-bills.service";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type {
   PluggyItemRecord,

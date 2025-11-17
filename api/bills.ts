@@ -1,5 +1,5 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
-import { creditCardBillsService } from "../lib/services/credit-card-bills";
+import { creditCardBillsService } from "../lib/services/credit-card-bills.service";
 import { getPluggyClient, hasPluggyCredentials } from "../lib/pluggyClient";
 import type { CreditCardBillRecord } from "../lib/types";
 
