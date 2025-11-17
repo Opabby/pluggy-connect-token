@@ -1,7 +1,8 @@
 import { getPluggyClient, hasPluggyCredentials } from "../../pluggyClient";
-import { ItemWebhookPayload, PluggyItemRecord } from "../../types";
+import { ItemWebhookPayload } from "../../types";
 import { itemsService } from "../items.service";
 import { syncItemData } from "../sync.service";
+import { mapItemFromPluggyToDb } from "../mappers/item.mapper";
 
 export async function handleItemEvent(payload: ItemWebhookPayload): Promise<void> {
   if (!hasPluggyCredentials()) {
@@ -20,27 +21,7 @@ export async function handleItemEvent(payload: ItemWebhookPayload): Promise<void
   try {
     const pluggy = getPluggyClient();
     const item = await pluggy.fetchItem(itemId);
-
-    const itemData = item as any;
-    const connector = itemData.connector || {};
-    
-    const itemRecord: PluggyItemRecord = {
-      item_id: itemData.id,
-      user_id: itemData.userId || payload.clientUserId || undefined,
-      connector_id: connector.id ? connector.id.toString() : itemData.connectorId?.toString(),
-      connector_name: connector.name || itemData.connectorName,
-      connector_image_url: connector.imageUrl || connector.image_url || itemData.connectorImageUrl,
-      status: itemData.status,
-      created_at: itemData.createdAt,
-      updated_at: itemData.updatedAt,
-      last_updated_at: itemData.lastUpdatedAt,
-      webhook_url: itemData.webhookUrl || itemData.webhook_url,
-      parameters: itemData.parameters,
-      institution_name: connector.name || itemData.connectorName || itemData.institutionName,
-      institution_url: connector.url || connector.website || itemData.institutionUrl,
-      primary_color: connector.primaryColor || connector.primary_color || itemData.primaryColor,
-      secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
-    };
+    const itemRecord = mapItemFromPluggyToDb(item);
 
     try {
       await itemsService.upsertItem(itemRecord);
@@ -94,29 +75,8 @@ export async function handleItemStatusEvent(payload: ItemWebhookPayload): Promis
     }
 
     const pluggy = getPluggyClient();
-
     const item = await pluggy.fetchItem(itemId);
-
-    const itemData = item as any;
-    const connector = itemData.connector || {};
-    
-    const itemRecord: PluggyItemRecord = {
-      item_id: itemData.id,
-      user_id: itemData.userId || payload.clientUserId || undefined,
-      connector_id: connector.id ? connector.id.toString() : itemData.connectorId?.toString(),
-      connector_name: connector.name || itemData.connectorName,
-      connector_image_url: connector.imageUrl || connector.image_url || itemData.connectorImageUrl,
-      status: itemData.status,
-      created_at: itemData.createdAt,
-      updated_at: itemData.updatedAt,
-      last_updated_at: itemData.lastUpdatedAt,
-      webhook_url: itemData.webhookUrl || itemData.webhook_url,
-      parameters: itemData.parameters,
-      institution_name: connector.name || itemData.connectorName || itemData.institutionName,
-      institution_url: connector.url || connector.website || itemData.institutionUrl,
-      primary_color: connector.primaryColor || connector.primary_color || itemData.primaryColor,
-      secondary_color: connector.secondaryColor || connector.secondary_color || itemData.secondaryColor,
-    };
+    const itemRecord = mapItemFromPluggyToDb(item);
 
     await itemsService.upsertItem(itemRecord);
   } catch (error) {

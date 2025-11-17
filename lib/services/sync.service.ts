@@ -11,22 +11,16 @@ import type {
   ItemWebhookPayload,
   ConnectorStatusWebhookPayload,
   TransactionsWebhookPayload,
-  PaymentIntentWebhookPayload,
-  PaymentRequestWebhookPayload,
-  ScheduledPaymentWebhookPayload,
-  AutomaticPixPaymentWebhookPayload,
-  PaymentRefundWebhookPayload,
-  PluggyItemRecord,
   AccountRecord,
-  TransactionRecord,
   IdentityRecord,
   InvestmentRecord,
   LoanRecord,
   CreditCardBillRecord,
 } from "../types";
 import { handleItemEvent, handleItemDeleted, handleItemStatusEvent } from "./webhook-handlers/item.handler";
-import { handleTransactionsCreated } from "./webhook-handlers/transaction.handler";
+import { handleTransactionsCreated, handleTransactionsDeleted } from "./webhook-handlers/transaction.handler";
 import { upsertTransactionRecord } from "./webhook-handlers/utils";
+import {handleConnectorStatusUpdate} from "./webhook-handlers/connector-handler"
 
 export async function processWebhookEvent(payload: WebhookPayload): Promise<void> {
   try {
@@ -55,41 +49,11 @@ export async function processWebhookEvent(payload: WebhookPayload): Promise<void
         break;
 
       case "transactions/updated":
-        await handleTransactionsUpdated(payload as TransactionsWebhookPayload);
+        await handleTransactionsCreated(payload as TransactionsWebhookPayload);
         break;
 
       case "transactions/deleted":
         await handleTransactionsDeleted(payload as TransactionsWebhookPayload);
-        break;
-
-      case "payment_intent/created":
-      case "payment_intent/completed":
-      case "payment_intent/waiting_payer_authorization":
-      case "payment_intent/error":
-        await handlePaymentIntentEvent(payload as PaymentIntentWebhookPayload);
-        break;
-
-      case "payment_request/updated":
-        await handlePaymentRequestUpdated(payload as PaymentRequestWebhookPayload);
-        break;
-
-      case "scheduled_payment/created":
-      case "scheduled_payment/completed":
-      case "scheduled_payment/error":
-      case "scheduled_payment/canceled":
-        await handleScheduledPaymentEvent(payload as ScheduledPaymentWebhookPayload);
-        break;
-
-      case "automatic_pix_payment/created":
-      case "automatic_pix_payment/completed":
-      case "automatic_pix_payment/error":
-      case "automatic_pix_payment/canceled":
-        await handleAutomaticPixPaymentEvent(payload as AutomaticPixPaymentWebhookPayload);
-        break;
-
-      case "payment_refund/completed":
-      case "payment_refund/error":
-        await handlePaymentRefundEvent(payload as PaymentRefundWebhookPayload);
         break;
 
       default:
@@ -327,52 +291,3 @@ export async function syncItemData(itemId: string): Promise<void> {
     throw error;
   }
 }
-
-async function handleConnectorStatusUpdate(payload: ConnectorStatusWebhookPayload): Promise<void> {
-  const { connectorId, data } = payload;
-  console.log(`Connector ${connectorId} status updated:`, data);
-}
-
-async function handleTransactionsUpdated(payload: TransactionsWebhookPayload): Promise<void> {
-  await handleTransactionsCreated(payload);
-}
-
-async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): Promise<void> {
-  const { transactionIds } = payload;
-  
-  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
-    return;
-  }
-
-  try {
-    await transactionsService.deleteMultipleTransactions(transactionIds);
-  } catch (error) {
-    console.error(`Error handling transactions deleted event:`, error);
-    throw error;
-  }
-}
-
-// async function handlePaymentIntentEvent(payload: PaymentIntentWebhookPayload): Promise<void> {
-//   const { event, paymentIntentId, paymentRequestId, bulkPaymentId } = payload;
-//   console.log(`Payment intent event ${event}:`, { paymentIntentId, paymentRequestId, bulkPaymentId });
-// }
-
-// async function handlePaymentRequestUpdated(payload: PaymentRequestWebhookPayload): Promise<void> {
-//   const { paymentRequestId, status } = payload;
-//   console.log(`Payment request ${paymentRequestId} updated to status:`, status);
-// }
-
-// async function handleScheduledPaymentEvent(payload: ScheduledPaymentWebhookPayload): Promise<void> {
-//   const { event, scheduledPaymentId, paymentRequestId } = payload;
-//   console.log(`Scheduled payment event ${event}:`, { scheduledPaymentId, paymentRequestId });
-// }
-
-// async function handleAutomaticPixPaymentEvent(payload: AutomaticPixPaymentWebhookPayload): Promise<void> {
-//   const { event, automaticPixPaymentId, paymentRequestId, endToEndId } = payload;
-//   console.log(`Automatic Pix payment event ${event}:`, { automaticPixPaymentId, paymentRequestId, endToEndId });
-// }
-
-// async function handlePaymentRefundEvent(payload: PaymentRefundWebhookPayload): Promise<void> {
-//   const { event, refundId, paymentRequestId } = payload;
-//   console.log(`Payment refund event ${event}:`, { refundId, paymentRequestId });
-// }

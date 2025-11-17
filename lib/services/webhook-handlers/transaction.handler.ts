@@ -1,6 +1,7 @@
 import { getPluggyClient, hasPluggyCredentials } from "../../pluggyClient";
 import { TransactionsWebhookPayload } from "../../types";
 import { upsertTransactionRecord } from "./utils";
+import { transactionsService } from "../transactions.service";
 
 export async function handleTransactionsCreated(payload: TransactionsWebhookPayload): Promise<void> {
   const { itemId, accountId, transactionIds } = payload;
@@ -48,6 +49,21 @@ export async function handleTransactionsCreated(payload: TransactionsWebhookPayl
     }
   } catch (error) {
     console.error(`Error handling transactions created event:`, error);
+    throw error;
+  }
+}
+
+export async function handleTransactionsDeleted(payload: TransactionsWebhookPayload): Promise<void> {
+  const { transactionIds } = payload;
+  
+  if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+    return;
+  }
+
+  try {
+    await transactionsService.deleteMultipleTransactions(transactionIds);
+  } catch (error) {
+    console.error(`Error handling transactions deleted event:`, error);
     throw error;
   }
 }
